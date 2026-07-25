@@ -22,7 +22,14 @@ import { type Grid, cellCount } from './grid';
 export interface WaterParams {
   /** Gravity. Higher = water accelerates harder down slopes. */
   gravity: number;
-  /** Virtual pipe cross-section. Scales overall flow rate; the main "speed" knob. */
+  /**
+   * Virtual pipe cross-section per metre of water depth. The main "speed" knob.
+   *
+   * Scaling the pipe by depth is what makes discharge behave like q = h*u
+   * rather than a fixed volume per second. With a constant cross-section a
+   * brimming channel and a shallow trickle push the same volume, so the
+   * current ends up *inversely* proportional to depth and deep water crawls.
+   */
   pipeArea: number;
   /**
    * Bed friction, as a fraction of flow shed per second.
@@ -52,7 +59,7 @@ export interface WaterParams {
 export const DEFAULT_WATER_PARAMS: WaterParams = {
   gravity: 9.81,
   pipeArea: 1.0,
-  flowDamping: 1.5,
+  flowDamping: 0.15,
   evaporation: 0,
   minDepth: 0.02,
   // Only a safety net: on real terrain the current settles at 0.5-2 m/s under
@@ -187,8 +194,9 @@ export class WaterSim {
     const { gravity, pipeArea, openBorder, flowDamping } = this.params;
     const { terrain, depth, fluxL, fluxR, fluxT, fluxB } = this;
 
-    // Acceleration coefficient for a pipe: dt * A * g / l
-    const k = (dt * pipeArea * gravity) / cellSize;
+    // Acceleration coefficient for a pipe: dt * A * g / l, with A scaled by the
+    // depth of the column doing the pushing.
+    const k0 = (dt * pipeArea * gravity) / cellSize;
     const cellArea = cellSize * cellSize;
     // Bed friction: flow retained after this step.
     const damp = flowDamping > 0 ? Math.max(0, 1 - flowDamping * dt) : 1;
@@ -218,6 +226,8 @@ export class WaterSim {
         const hT = y > 0 ? terrain[i - width] + depth[i - width] : openBorder ? terrain[i] : h;
         const hB =
           y < height - 1 ? terrain[i + width] + depth[i + width] : openBorder ? terrain[i] : h;
+
+        const k = k0 * d;
 
         let fL = Math.max(0, fluxL[i] * damp + k * (h - hL));
         let fR = Math.max(0, fluxR[i] * damp + k * (h - hR));

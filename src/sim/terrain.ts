@@ -140,6 +140,17 @@ function fbm(x: number, y: number, seed: number, octaves = 4): number {
 }
 
 /**
+ * Where the default valley's channel runs, as a fraction of the map width, for
+ * a position `v` (0 at the head, 1 at the mouth) down the valley.
+ *
+ * Exported so anything placing objects on the river - the bundled demo level,
+ * for instance - can find the water without having to search the heightmap.
+ */
+export function defaultChannelCentre(v: number): number {
+  return 0.5 + 0.22 * Math.sin(v * Math.PI * 2.2) + 0.08 * Math.sin(v * Math.PI * 5.1);
+}
+
+/**
  * Terrain for a brand-new level: a noisy valley draining from the top of the
  * map to the bottom, with a meandering channel already cut into it. A blank
  * flat plane would be a miserable starting point — this gives the player a
@@ -152,22 +163,41 @@ export function generateDefaultTerrain(g: Grid, seed = 1337): Float32Array {
   for (let y = 0; y < height; y++) {
     const v = y / (height - 1);
     // Overall drop from head to mouth.
-    const slope = 22 * (1 - v);
+    const fall = 20 * (1 - v);
 
     // Channel centre wanders left and right as it descends.
-    const meander = 0.5 + 0.22 * Math.sin(v * Math.PI * 2.2) + 0.08 * Math.sin(v * Math.PI * 5.1);
-    const channelX = meander * (width - 1);
+    const channelX = defaultChannelCentre(v) * (width - 1);
+
+    // The riverbed is an explicit, strictly decreasing function of distance
+    // down the valley, and the channel blends *to* it rather than being
+    // subtracted from noisy ground.
+    //
+    // Two things matter here, and both were learned the hard way. The bed must
+    // be monotonic, because noise big enough to make hillsides interesting
+    // (metres) dwarfs the bed's fall between adjacent cells (~0.16 m), so
+    // notching a channel out of noisy terrain leaves a chain of disconnected
+    // basins and the water never reaches the far end. And the noise must be
+    // damped down near the river, or water wandering a few cells off centre
+    // drops into a pit and pools there instead of running downhill.
+    const bed = fall - 1.2;
 
     for (let x = 0; x < width; x++) {
-      const n = fbm(x / 18, y / 18, seed) * 9 + fbm(x / 5, y / 5, seed + 99) * 2;
+      // Distance from the channel, in units of roughly half the channel width.
+      const dx = (x - channelX) / (width * 0.06);
+      const inChannel = Math.exp(-dx * dx);
+      // A wider, gentler skirt over which the terrain settles down to a
+      // floodplain, so the banks are calm and drain back towards the water.
+      const floodplain = Math.exp(-(dx * dx) / 16);
 
-      // Valley walls rise away from the channel; the channel floor is carved
-      // below them so water has somewhere to collect.
+      const noiseAmp = 4 * (1 - 0.9 * floodplain);
+      const n = (fbm(x / 22, y / 22, seed) * 0.8 + fbm(x / 7, y / 7, seed + 99) * 0.2) * noiseAmp;
+
+      // Valley walls rise away from the channel.
       const dist = Math.abs(x - channelX) / (width * 0.5);
-      const walls = 26 * dist * dist;
-      const channel = 9 * Math.exp(-Math.pow((x - channelX) / (width * 0.055), 2));
+      const walls = 24 * dist * dist;
+      const ground = fall + 2.5 + walls + n;
 
-      t[y * width + x] = clamp(slope + walls + n - channel, TERRAIN_MIN, TERRAIN_MAX);
+      t[y * width + x] = clamp(ground + (bed - ground) * inChannel, TERRAIN_MIN, TERRAIN_MAX);
     }
   }
   return t;

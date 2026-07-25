@@ -122,11 +122,121 @@ export function buildSim(level: Level): WaterSim {
   return sim;
 }
 
+/** Eight-neighbour offsets, so the traced channel can run diagonally. */
+const NEIGHBOURS: ReadonlyArray<readonly [number, number]> = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+  [-1, -1],
+  [1, -1],
+  [-1, 1],
+  [1, 1],
+];
+
 /**
- * Run the water until it roughly reaches steady state, so play mode starts on
- * a flowing river instead of a dry bed.
+ * Lay water down the path it would eventually take, by walking downhill from
+ * each source.
+ *
+ * Simulating a river into existence is honest but far too slow to load a
+ * level on: water advances roughly as fast as it flows, so filling a 256 m
+ * valley takes over three minutes of simulated time. Tracing the descent gets
+ * the same channel wet in a single pass over the path, after which a few
+ * seconds of solver is enough to turn it into a moving river.
+ *
+ * Pits are handled the way water handles them - fill until it spills, then
+ * carry on from the low point of the rim - so this works on whatever the
+ * player has sculpted, not just on generated valleys.
  */
-export function primeSim(sim: WaterSim, sources: readonly WaterSource[], seconds = 20): void {
+export function primeByDescent(
+  sim: WaterSim,
+  sources: readonly WaterSource[],
+  targetDepth = 0.7,
+): void {
+  const { width, height } = sim.grid;
+  const { terrain, depth } = sim;
+  const surfaceAt = (i: number): number => terrain[i] + depth[i];
+
+  // Wet a small disc so the channel has some width from the outset.
+  const wet = (cx: number, cy: number, radius: number): void => {
+    const r = Math.ceil(radius);
+    for (let y = Math.max(0, cy - r); y <= Math.min(height - 1, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x <= Math.min(width - 1, cx + r); x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > radius * radius) continue;
+        const i = y * width + x;
+        // Fill towards the local low point rather than stacking a slab on a
+        // slope, so a wide brush stroke doesn't leave water clinging to banks.
+        const fill = targetDepth * (1 - Math.sqrt(d2) / (radius + 1));
+        if (depth[i] < fill) depth[i] = fill;
+      }
+    }
+  };
+
+  for (const source of sources) {
+    let x = Math.min(width - 1, Math.max(0, Math.round(source.x)));
+    let y = Math.min(height - 1, Math.max(0, Math.round(source.y)));
+    const maxSteps = (width + height) * 4;
+
+    for (let step = 0; step < maxSteps; step++) {
+      const i = y * width + x;
+      wet(x, y, Math.max(1.5, Math.min(source.radius, 4)));
+
+      let downX = -1;
+      let downY = -1;
+      let downSurface = surfaceAt(i);
+      let rimX = -1;
+      let rimY = -1;
+      let rimSurface = Infinity;
+      let atEdge = false;
+
+      for (const [dx, dy] of NEIGHBOURS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+          atEdge = true;
+          continue;
+        }
+        const ns = surfaceAt(ny * width + nx);
+        if (ns < rimSurface) {
+          rimSurface = ns;
+          rimX = nx;
+          rimY = ny;
+        }
+        if (ns < downSurface) {
+          downSurface = ns;
+          downX = nx;
+          downY = ny;
+        }
+      }
+
+      // Running off the map is the outlet - the river has found its mouth.
+      if (atEdge) break;
+
+      if (downX >= 0) {
+        x = downX;
+        y = downY;
+        continue;
+      }
+
+      // Nowhere lower: this is a pit. Raise the water until it tops the lowest
+      // point of the rim, then continue from there.
+      if (rimX < 0) break;
+      depth[i] = Math.max(depth[i], rimSurface - terrain[i] + 0.02);
+      x = rimX;
+      y = rimY;
+    }
+  }
+}
+
+/**
+ * Get the river running, so play mode starts on flowing water rather than a
+ * dry bed: trace the channel, then let the solver settle it into real flow.
+ */
+export function primeSim(sim: WaterSim, sources: readonly WaterSource[], seconds = 10): void {
+  primeByDescent(sim, sources);
   const dt = 1 / 60;
   const steps = Math.round(seconds / dt);
   for (let i = 0; i < steps; i++) {
@@ -179,7 +289,7 @@ function toBase64Url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function fromBase64Url(text: string): Uint8Array {
+function fromBase64Url(text: string): Uint8Array<ArrayBuffer> {
   const padded = text.replace(/-/g, '+').replace(/_/g, '/');
   const bin = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
   const out = new Uint8Array(bin.length);
@@ -192,7 +302,11 @@ function fromBase64Url(text: string): Uint8Array {
  * error, as a zigzag varint. On smooth terrain most residuals are 0 or +/-1
  * and pack into a single byte.
  */
-function encodeTerrain(terrain: Float32Array, width: number, height: number): Uint8Array {
+function encodeTerrain(
+  terrain: Float32Array,
+  width: number,
+  height: number,
+): Uint8Array<ArrayBuffer> {
   const scale = TERRAIN_LEVELS / TERRAIN_MAX;
   const q = new Int32Array(width * height);
   for (let i = 0; i < q.length; i++) {
@@ -221,7 +335,11 @@ function encodeTerrain(terrain: Float32Array, width: number, height: number): Ui
   return out.subarray(0, n);
 }
 
-function decodeTerrain(bytes: Uint8Array, width: number, height: number): Float32Array {
+function decodeTerrain(
+  bytes: Uint8Array<ArrayBuffer>,
+  width: number,
+  height: number,
+): Float32Array {
   const cells = width * height;
   const q = new Int32Array(cells);
   const inv = TERRAIN_MAX / TERRAIN_LEVELS;
@@ -257,12 +375,12 @@ function decodeTerrain(bytes: Uint8Array, width: number, height: number): Float3
   return terrain;
 }
 
-async function deflate(bytes: Uint8Array): Promise<Uint8Array> {
+async function deflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+async function inflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
@@ -334,7 +452,7 @@ function sanitiseEntities<T extends { x: number; y: number; radius: number }>(
  * and the terrain block must be exactly the length the header claims.
  */
 export async function decodeLevel(code: string): Promise<Level> {
-  let payload: Uint8Array;
+  let payload: Uint8Array<ArrayBuffer>;
   try {
     payload = await inflate(fromBase64Url(code.trim()));
   } catch {

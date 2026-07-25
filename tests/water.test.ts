@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeGrid, sampleBilinear } from '../src/sim/grid';
-import { WaterSim } from '../src/sim/water';
+import { DEFAULT_WATER_PARAMS, WaterSim } from '../src/sim/water';
 
 function flatSim(size = 16, terrainHeight = 5) {
   const grid = makeGrid(size, size, 1);
@@ -112,10 +112,10 @@ describe('WaterSim', () => {
     for (let y = 4; y < 12; y++) {
       for (let x = 4; x < 12; x++) sim.depth[y * 16 + x] = 1.5;
     }
-    run(sim, 40);
+    // Bed friction is light, so settling takes a while - but it must actually
+    // finish, or a lake in the editor would ripple forever.
+    run(sim, 90);
 
-    // With bed friction the sloshing must decay to a standstill, otherwise a
-    // lake in the editor would ripple forever.
     let maxSpeed = 0;
     for (let i = 0; i < sim.depth.length; i++) {
       maxSpeed = Math.max(maxSpeed, Math.hypot(sim.vx[i], sim.vy[i]));
@@ -125,13 +125,13 @@ describe('WaterSim', () => {
 
   it('runs faster on a steeper slope', () => {
     const speedFor = (dropPerCell: number) => {
-      const grid = makeGrid(32, 32, 1);
+      const grid = makeGrid(32, 32, 2);
       const sim = new WaterSim(grid, { openBorder: true });
       for (let y = 0; y < 32; y++) {
         for (let x = 0; x < 32; x++) sim.terrain[y * 32 + x] = 25 - y * dropPerCell;
       }
-      const source = [{ x: 16, y: 1, rate: 6, radius: 6 }];
-      for (let i = 0; i < 60 * 10; i++) {
+      const source = [{ x: 16, y: 1, rate: 0.6, radius: 6 }];
+      for (let i = 0; i < 60 * 20; i++) {
         sim.applySources(source, 1 / 60);
         sim.step(1 / 60);
       }
@@ -139,8 +139,32 @@ describe('WaterSim', () => {
       return Math.hypot(sim.vx[i], sim.vy[i]);
     };
 
-    // Friction, not the velocity clamp, should be setting these speeds apart.
-    expect(speedFor(0.5)).toBeGreaterThan(speedFor(0.1) * 1.2);
+    const gentle = speedFor(0.02);
+    const steep = speedFor(0.2);
+
+    // Friction, not the velocity clamp, must be what sets these apart - so both
+    // have to sit clear of maxVelocity for the comparison to mean anything.
+    expect(steep).toBeGreaterThan(gentle * 1.5);
+    expect(steep).toBeLessThan(DEFAULT_WATER_PARAMS.maxVelocity * 0.95);
+  });
+
+  it('carries more water down a deeper channel, not less', () => {
+    // Discharge should rise with depth (q = h*u). A constant pipe area makes
+    // velocity fall as depth grows, which turns deep channels into stagnant
+    // ponds - the bug that kept the demo river from ever reaching its goal.
+    const dischargeFor = (depth: number) => {
+      const grid = makeGrid(24, 24, 2);
+      const sim = new WaterSim(grid, { openBorder: true });
+      for (let y = 0; y < 24; y++) {
+        for (let x = 0; x < 24; x++) sim.terrain[y * 24 + x] = 20 - y * 0.1;
+      }
+      sim.depth.fill(depth);
+      for (let i = 0; i < 60; i++) sim.step(1 / 60);
+      const i = 12 * 24 + 12;
+      return Math.hypot(sim.vx[i], sim.vy[i]) * sim.depth[i];
+    };
+
+    expect(dischargeFor(1.0)).toBeGreaterThan(dischargeFor(0.25));
   });
 
   it('drains off an open border but pools behind a closed one', () => {

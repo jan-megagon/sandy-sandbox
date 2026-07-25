@@ -1,0 +1,530 @@
+/*
+ * Mobile-first shell. The canvas fills the viewport and every control floats
+ * above it, anchored to the bottom where a thumb can reach.
+ */
+
+:root {
+  --bg: #0b1220;
+  --panel: rgba(14, 22, 38, 0.92);
+  --panel-solid: #0e1626;
+  --edge: rgba(120, 170, 220, 0.18);
+  --text: #e8eef7;
+  --muted: #93a4bd;
+  --accent: #4bb4e8;
+  --accent-dim: #1d5f80;
+  --danger: #e2564a;
+  --good: #56cc7a;
+  --touch: 48px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  /* Stop the browser hijacking drags for scroll, zoom and pull-to-refresh. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  /* The overlay is a pass-through layer; only its children take input. */
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+}
+
+#ui > * {
+  pointer-events: auto;
+}
+
+/* --- shared controls ------------------------------------------------------ */
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: rgba(30, 44, 68, 0.9);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  min-height: var(--touch);
+  padding: 0 16px;
+  cursor: pointer;
+  transition: background 120ms ease, transform 80ms ease;
+}
+
+button:active {
+  transform: scale(0.97);
+  background: rgba(48, 70, 104, 0.95);
+}
+
+button.primary {
+  background: linear-gradient(180deg, #3fa8dd, #2a7fae);
+  border-color: rgba(160, 220, 255, 0.4);
+  font-weight: 600;
+}
+
+button.danger {
+  background: rgba(90, 32, 30, 0.9);
+  border-color: rgba(226, 86, 74, 0.4);
+}
+
+button.ghost {
+  background: rgba(20, 30, 48, 0.75);
+}
+
+button[aria-pressed='true'] {
+  background: linear-gradient(180deg, #3fa8dd, #2a7fae);
+  border-color: rgba(160, 220, 255, 0.5);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+/* --- full-screen panels (menu, level select, results) --------------------- */
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--safe-top) + 20px) calc(var(--safe-right) + 18px)
+    calc(var(--safe-bottom) + 20px) calc(var(--safe-left) + 18px);
+  /* Translucent enough that the live river keeps showing through. */
+  background: linear-gradient(180deg, rgba(8, 14, 26, 0.62), rgba(8, 14, 26, 0.86));
+  backdrop-filter: blur(2px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 14px;
+}
+
+.title {
+  font-size: clamp(30px, 9vw, 46px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.05;
+}
+
+.title span {
+  color: var(--accent);
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  max-width: 34em;
+}
+
+.spacer {
+  flex: 1 1 auto;
+  min-height: 8px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.section-label {
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+/* --- level list ----------------------------------------------------------- */
+
+.level-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.level-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(22, 34, 54, 0.85);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.level-card .meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.level-card .name {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.level-card .sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 3px;
+}
+
+.level-card .actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.level-card button {
+  min-height: 42px;
+  min-width: 42px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.empty-note {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 18px;
+  border: 1px dashed var(--edge);
+  border-radius: 14px;
+  text-align: center;
+}
+
+/* --- editor --------------------------------------------------------------- */
+
+.top-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 12px) 10px
+    calc(var(--safe-left) + 12px);
+  background: linear-gradient(180deg, rgba(8, 14, 26, 0.85), transparent);
+}
+
+.top-bar button {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.top-bar .title-text {
+  flex: 1;
+  font-weight: 600;
+  font-size: 15px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+.bottom-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px calc(var(--safe-right) + 12px) calc(var(--safe-bottom) + 12px)
+    calc(var(--safe-left) + 12px);
+  background: linear-gradient(0deg, rgba(8, 14, 26, 0.94), rgba(8, 14, 26, 0.55) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tool-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.tool-row button {
+  min-height: 52px;
+  padding: 0 2px;
+  border-radius: 12px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.tool-row .glyph {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.slider-row label {
+  width: 52px;
+  flex-shrink: 0;
+}
+
+input[type='range'] {
+  flex: 1;
+  height: 34px;
+  accent-color: var(--accent);
+  background: transparent;
+}
+
+input[type='text'] {
+  font: inherit;
+  width: 100%;
+  min-height: var(--touch);
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: rgba(10, 18, 32, 0.9);
+  color: var(--text);
+}
+
+textarea {
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%;
+  min-height: 110px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--edge);
+  background: rgba(10, 18, 32, 0.9);
+  color: var(--text);
+  resize: vertical;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.45;
+}
+
+/* --- play HUD ------------------------------------------------------------- */
+
+.paddle-zones {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  touch-action: none;
+}
+
+.paddle-zones .zone {
+  flex: 1;
+  position: relative;
+}
+
+.paddle-zones .zone::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(var(--safe-bottom) + 26px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(220, 235, 255, 0.32);
+  transition: color 140ms ease;
+}
+
+.paddle-zones .zone.active::after {
+  color: var(--accent);
+}
+
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 14px) 10px
+    calc(var(--safe-left) + 14px);
+  background: linear-gradient(180deg, rgba(8, 14, 26, 0.8), transparent);
+  pointer-events: none;
+}
+
+.hud button {
+  pointer-events: auto;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.hud .timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 650;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8);
+}
+
+.hud .stat {
+  font-size: 12px;
+  color: var(--muted);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.hud .grow {
+  flex: 1;
+}
+
+.health-bar {
+  width: 86px;
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.health-bar > div {
+  height: 100%;
+  background: var(--good);
+  transition: width 160ms ease, background 160ms ease;
+}
+
+/* --- dialogs -------------------------------------------------------------- */
+
+.sheet {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(4, 8, 16, 0.66);
+  backdrop-filter: blur(4px);
+}
+
+.sheet-card {
+  width: min(440px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: var(--panel-solid);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.sheet-card h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.result-time {
+  font-size: 40px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.result-note {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 96px);
+  transform: translateX(-50%);
+  background: rgba(12, 20, 36, 0.96);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  padding: 11px 18px;
+  font-size: 14px;
+  max-width: 84vw;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.toast.show {
+  opacity: 1;
+}
+
+.toast.error {
+  border-color: rgba(226, 86, 74, 0.55);
+}
+
+/* Landscape phones have very little vertical room; tighten the chrome. */
+@media (max-height: 460px) {
+  .title {
+    font-size: 28px;
+  }
+  .tool-row button {
+    min-height: 44px;
+  }
+  .screen {
+    gap: 10px;
+  }
+}
