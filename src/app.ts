@@ -486,7 +486,7 @@ class BackdropMode implements AppMode {
   ) {
     this.sim = buildSim(level);
     this.sources = toSimSources(level);
-    primeSim(this.sim, this.sources, 12);
+    primeSim(this.sim, this.sources, { maxSeconds: 12 });
 
     const grid = levelGrid(level);
     renderer.setGrid(grid);

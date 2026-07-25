@@ -54,6 +54,42 @@ runs the solver for a few seconds to turn the traced channel into moving water.
 That takes ~200 ms instead of ~200 s. If a level opens dry, this is the code to
 look at.
 
+Priming stops early if the water settles, but on anything valley-sized it won't:
+the budget a load screen can afford is 4–12 s and the demo needs about 200. What
+that early exit really buys is levels with no springs, or a small pool that is
+done in a second, not paying for a budget they don't need. Filling the rest is
+the editor's **Fill ⏩** button, which is the same `SettleRun` given 300 s and
+spread across frames.
+
+### Settling — `SETTLED_RATE` in `src/sim/level.ts`
+
+Water counts as settled when the mean change in depth across the wet cells falls
+below **1e-3 m/s**. Measured on the bundled demo, sampling every 0.25 s:
+
+| Simulated time | Residual | Volume | Share of final |
+|---|---|---|---|
+| 2 s | 1.8e-1 | 714 | 58% |
+| 20 s | 2.1e-2 | 758 | 62% |
+| 60 s | 9.2e-3 | 839 | 68% |
+| 120 s | 3.3e-3 | 984 | 80% |
+| 200 s | 1.2e-3 | 1150 | 94% |
+| 300 s | 2.4e-4 | 1223 | 100% |
+
+Two things about that curve are worth knowing before changing the constant.
+
+**The residual climbs before it falls.** `primeByDescent` leaves water standing
+where it was traced, so the first checks see a nearly static field and read
+*low* — 2.5e-2 at t=0.25 s, against a peak of 1.8e-1 at t≈2 s. Any threshold
+above ~2e-2 would pass on the first check, on a river that hasn't started
+moving. `SETTLE_RAMP_SECONDS` (3 s) is what stops that, and it is why the check
+is not simply "residual below threshold".
+
+**Total volume is the tempting measure and the wrong one.** It stalls whenever
+the water finishes one basin and climbs again when that basin spills into the
+next — on the demo it drops to 1.26 m³/s at t=20 s, then rises back to 2.88 at
+t=70 s. A threshold on volume reads as settled several times on the way down a
+valley. Depth residual decays monotonically after its peak; volume does not.
+
 ## Kayak — `DEFAULT_KAYAK_PARAMS` in `src/game/kayak.ts`
 
 Tuned to these targets, measured on flat water:

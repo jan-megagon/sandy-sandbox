@@ -71,6 +71,16 @@ Tools: raise, lower and smooth terrain; place springs, a start, a goal and
 rocks; erase. A level needs a spring, a start and a goal before it can be
 played.
 
+A valley can need minutes of simulation to fill, which is not something to sit
+and watch at 1x. **Fill ⏩** runs the water forward as fast as the device
+allows, spending part of each frame on extra solver steps so the river fills in
+front of you and the editor stays usable. It stops on its own once the water
+settles — when the depth field stops changing, which is steady state for a
+river that is still very much moving — and tells you how much river time that
+took. The demo valley settles after about 200 s of simulation. Press it again
+to stop early; editing anything cancels it, since the run is settling the
+ground as it stood when it started.
+
 Levels are stored in the browser and can be shared as a link or a code —
 terrain and all, no server involved.
 

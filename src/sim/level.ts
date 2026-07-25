@@ -232,17 +232,163 @@ export function primeByDescent(
 }
 
 /**
- * Get the river running, so play mode starts on flowing water rather than a
- * dry bed: trace the channel, then let the solver settle it into real flow.
+ * Mean rate of change of depth, in metres per second, below which the water
+ * counts as settled.
+ *
+ * Measured on the bundled demo: the residual peaks around 1.8e-1 a couple of
+ * seconds in, then decays smoothly to 2.4e-4 by 300 s. Crossing 1e-3 puts the
+ * valley at ~94% of the volume it eventually holds, which is the point past
+ * which more simulation stops changing how the river reads.
  */
-export function primeSim(sim: WaterSim, sources: readonly WaterSource[], seconds = 10): void {
-  primeByDescent(sim, sources);
-  const dt = 1 / 60;
-  const steps = Math.round(seconds / dt);
-  for (let i = 0; i < steps; i++) {
-    sim.applySources(sources, dt);
-    sim.step(dt);
+export const SETTLED_RATE = 1e-3;
+
+/**
+ * Seconds to run before the settle check is allowed to fire.
+ *
+ * `primeByDescent` leaves water sitting where it was traced rather than moving,
+ * so the residual *climbs* for the first couple of seconds as the solver gets
+ * it going. Without this floor a settle test would pass on the first check, on
+ * water that hasn't started flowing yet.
+ */
+const SETTLE_RAMP_SECONDS = 3;
+
+const SETTLE_CHECK_INTERVAL = 0.25;
+
+export interface SettleOptions {
+  /** Ceiling on simulated seconds, so a level that never settles still ends. */
+  maxSeconds?: number;
+  /** Residual below which the water counts as settled (metres per second). */
+  settledRate?: number;
+}
+
+export interface SettleReport {
+  /** Simulated seconds actually run. */
+  seconds: number;
+  /** True if the water settled, false if it ran out of budget still moving. */
+  settled: boolean;
+  /** The residual when the run ended (metres per second). */
+  rate: number;
+}
+
+/**
+ * Runs the solver forward until the water stops changing, or until it has used
+ * up the time it was given.
+ *
+ * A river at steady state is not still - it is moving as fast as it ever will,
+ * and only its *depth* has stopped changing - so the residual to watch is the
+ * rate of change of depth, not of flow. Total volume would seem the more
+ * obvious measure and is a worse one: it stalls each time the water finishes a
+ * basin and climbs again when that basin spills into the next, so it reads as
+ * settled several times on the way down a valley.
+ *
+ * Some levels never settle at all. A closed basin fills until it spills, and a
+ * basin larger than its springs can fill just keeps rising; `maxSeconds` is
+ * what keeps those from running forever.
+ *
+ * The work is split into slices so a caller can spread it over frames rather
+ * than blocking on all of it - see the editor's fast-forward.
+ */
+export class SettleRun {
+  private readonly maxSeconds: number;
+  private readonly settledRate: number;
+  private previous: Float32Array;
+  private elapsed = 0;
+  private sinceCheck = 0;
+  private rate = Infinity;
+  private isSettled = false;
+
+  constructor(
+    private readonly sim: WaterSim,
+    private readonly sources: readonly WaterSource[],
+    options: SettleOptions = {},
+  ) {
+    this.maxSeconds = options.maxSeconds ?? 10;
+    this.settledRate = options.settledRate ?? SETTLED_RATE;
+    this.previous = new Float32Array(sim.depth);
   }
+
+  get done(): boolean {
+    return this.isSettled || this.elapsed >= this.maxSeconds;
+  }
+
+  get report(): SettleReport {
+    return {
+      seconds: this.elapsed,
+      settled: this.isSettled,
+      rate: this.rate === Infinity ? 0 : this.rate,
+    };
+  }
+
+  /** How much of the budget has been spent, 0 to 1. */
+  get progress(): number {
+    return Math.min(1, this.elapsed / this.maxSeconds);
+  }
+
+  /** Advance by at most `seconds` of simulated time. Returns what it ran. */
+  advance(seconds: number): number {
+    const dt = 1 / 60;
+    let run = 0;
+    while (!this.done && run < seconds) {
+      this.sim.applySources(this.sources, dt);
+      this.sim.step(dt);
+      run += dt;
+      this.elapsed += dt;
+      this.sinceCheck += dt;
+      if (this.sinceCheck >= SETTLE_CHECK_INTERVAL) this.check();
+    }
+    return run;
+  }
+
+  private check(): void {
+    const { depth, params } = this.sim;
+    let sum = 0;
+    let wet = 0;
+    for (let i = 0; i < depth.length; i++) {
+      const d = depth[i];
+      const p = this.previous[i];
+      // Cells that are dry at both ends of the interval contribute nothing but
+      // would otherwise dilute the mean towards zero on a mostly dry map.
+      if (d > params.minDepth || p > params.minDepth) {
+        sum += Math.abs(d - p);
+        wet++;
+      }
+    }
+
+    if (wet === 0) {
+      // No water anywhere - a level with no springs, or one that has drained.
+      // There is nothing to settle, so don't spend the rest of the budget.
+      this.rate = 0;
+      this.isSettled = true;
+      return;
+    }
+
+    this.rate = sum / wet / this.sinceCheck;
+    if (this.elapsed >= SETTLE_RAMP_SECONDS && this.rate < this.settledRate) {
+      this.isSettled = true;
+    }
+    this.previous.set(depth);
+    this.sinceCheck = 0;
+  }
+}
+
+/**
+ * Get the river running, so a level opens on flowing water rather than a dry
+ * bed: trace the channel, then let the solver turn it into real flow.
+ *
+ * This stops early once the water settles, but most levels won't within the
+ * budget a load screen can afford - the demo valley needs about 200 s of
+ * simulation to settle and gets 10. The editor's fast-forward is what covers
+ * the rest.
+ */
+export function primeSim(
+  sim: WaterSim,
+  sources: readonly WaterSource[],
+  options: SettleOptions = {},
+): SettleReport {
+  primeByDescent(sim, sources);
+  const run = new SettleRun(sim, sources, options);
+  while (!run.done) run.advance(0.5);
+  return run.report;
 }
 
 // ---------------------------------------------------------------------------

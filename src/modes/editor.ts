@@ -1,6 +1,6 @@
 import { GestureRecognizer } from '../input/gestures';
 import type { Renderer, Scene } from '../render/renderer';
-import { type Level, buildSim, levelGrid, primeSim, toSimSources } from '../sim/level';
+import { type Level, SettleRun, buildSim, levelGrid, primeSim, toSimSources } from '../sim/level';
 import { type BrushMode, type DirtyRect, applyBrush, unionRect } from '../sim/terrain';
 import type { WaterSim } from '../sim/water';
 import { button, clear, el, sheet, toast } from '../ui/dom';
@@ -40,6 +40,20 @@ interface Snapshot {
 
 const MAX_UNDO = 12;
 
+/**
+ * Ceiling on one fast-forward, in simulated seconds. Generous, because it is
+ * the settle check that normally ends the run - this only catches the levels
+ * that never settle at all.
+ */
+const BOOST_MAX_SECONDS = 300;
+
+/**
+ * Wall-clock milliseconds per frame to spend fast-forwarding. Kept under a
+ * frame so the river is visibly filling while it runs; blocking on the whole
+ * job would freeze the editor for seconds and show nothing until it finished.
+ */
+const BOOST_FRAME_BUDGET_MS = 10;
+
 export interface EditorCallbacks {
   onExit(): void;
   onTest(level: Level): void;
@@ -61,6 +75,10 @@ export class EditorMode {
   private undoButton: HTMLButtonElement | null = null;
   private hintNode: HTMLElement | null = null;
   private unsavedChanges = false;
+  private boost: SettleRun | null = null;
+  private boostButton: HTMLButtonElement | null = null;
+  /** Simulated seconds per frame, adapted to whatever this device can manage. */
+  private boostSlice = 0.25;
 
   constructor(
     level: Level,
@@ -73,7 +91,7 @@ export class EditorMode {
     // Open on a river that is already running. Waiting for the springs to fill
     // the valley in real time would mean minutes of staring at dry ground
     // before an edit shows you anything.
-    primeSim(this.sim, toSimSources(level), 4);
+    primeSim(this.sim, toSimSources(level), { maxSeconds: 4 });
 
     this.renderer.setGrid(levelGrid(level));
     this.renderer.uploadTerrain(level.terrain);
@@ -95,6 +113,7 @@ export class EditorMode {
   }
 
   dispose(): void {
+    this.boost = null;
     this.gestures.detach();
     clear(this.ui);
   }
@@ -123,6 +142,11 @@ export class EditorMode {
   // --- undo -----------------------------------------------------------------
 
   private pushUndo(): void {
+    // A fast-forward is settling the ground as it stood when it started, and it
+    // holds the spring list from then too. An edit invalidates both, so stop
+    // rather than carry on settling terrain that no longer exists.
+    if (this.boost) this.stopBoost('cancelled');
+
     this.undoStack.push({
       terrain: new Float32Array(this.level.terrain),
       sources: this.level.sources.map((s) => ({ ...s })),
@@ -136,6 +160,7 @@ export class EditorMode {
   }
 
   undo(): void {
+    if (this.boost) this.stopBoost('cancelled');
     const snap = this.undoStack.pop();
     if (!snap) return;
     this.level.terrain.set(snap.terrain);
@@ -310,10 +335,81 @@ export class EditorMode {
   // --- loop -----------------------------------------------------------------
 
   update(dt: number): void {
-    this.sim.applySources(toSimSources(this.level), dt);
-    this.sim.step(dt);
+    if (this.boost) {
+      this.advanceBoost();
+    } else {
+      this.sim.applySources(toSimSources(this.level), dt);
+      this.sim.step(dt);
+    }
     // Painting uploads on stroke end, but a long drag should still show up.
     if (this.dirty) this.flushDirty();
+  }
+
+  // --- fast-forward ---------------------------------------------------------
+
+  /**
+   * Run the water forward far faster than real time until it settles.
+   *
+   * A valley can need minutes of simulation to fill, which is not something to
+   * sit and watch at 1x. This spends part of each frame on extra solver steps
+   * instead, so the river fills in front of you and the editor stays usable.
+   */
+  private startBoost(): void {
+    if (this.boost) {
+      this.stopBoost('cancelled');
+      return;
+    }
+    if (this.level.sources.length === 0) {
+      toast(this.ui, 'Place a spring first — there is nothing to fill the river.');
+      return;
+    }
+    this.boost = new SettleRun(this.sim, toSimSources(this.level), {
+      maxSeconds: BOOST_MAX_SECONDS,
+    });
+    this.refreshBoostButton();
+    this.refreshHint();
+  }
+
+  private advanceBoost(): void {
+    const boost = this.boost;
+    if (!boost) return;
+
+    const started = performance.now();
+    boost.advance(this.boostSlice);
+    const cost = performance.now() - started;
+
+    // Re-aim the slice at one frame budget's worth of work, so a fast phone
+    // fast-forwards faster and a slow one still renders while it does.
+    if (cost > 0.5) {
+      const scaled = (this.boostSlice * BOOST_FRAME_BUDGET_MS) / cost;
+      this.boostSlice = Math.min(4, Math.max(0.05, scaled));
+    }
+
+    if (boost.done) this.stopBoost('done');
+    else this.refreshHint();
+  }
+
+  private stopBoost(reason: 'done' | 'cancelled'): void {
+    const report = this.boost?.report;
+    this.boost = null;
+    this.refreshBoostButton();
+    this.refreshHint();
+    if (!report) return;
+
+    const seconds = Math.round(report.seconds);
+    if (reason === 'cancelled') {
+      toast(this.ui, `Stopped after ${seconds} s of fast-forward.`);
+    } else if (report.settled) {
+      toast(this.ui, `River settled after ${seconds} s.`);
+    } else {
+      toast(this.ui, `Fast-forwarded ${seconds} s — still filling.`);
+    }
+  }
+
+  private refreshBoostButton(): void {
+    if (!this.boostButton) return;
+    this.boostButton.textContent = this.boost ? 'Stop ⏹' : 'Fill ⏩';
+    this.boostButton.setAttribute('aria-pressed', String(this.boost !== null));
   }
 
   buildScene(time: number): Scene {
@@ -347,6 +443,14 @@ export class EditorMode {
 
   private refreshHint(): void {
     if (!this.hintNode) return;
+
+    if (this.boost) {
+      // The elapsed count is the point: it says how much river-time the valley
+      // has had, which is the thing you're waiting on.
+      this.hintNode.textContent = `Filling — ${Math.round(this.boost.report.seconds)} s of river time…`;
+      return;
+    }
+
     const missing: string[] = [];
     if (this.level.sources.length === 0) missing.push('a spring');
     if (!this.level.start) missing.push('a start');
@@ -410,6 +514,12 @@ export class EditorMode {
 
     this.hintNode = el('div', { class: 'hint' });
 
+    const boostBtn = button('Fill ⏩', () => this.startBoost(), {
+      class: 'ghost',
+      title: 'Run the water forward until it settles',
+    });
+    this.boostButton = boostBtn;
+
     const dock = el('div', { class: 'bottom-dock' }, [
       this.hintNode,
       toolRow,
@@ -417,9 +527,11 @@ export class EditorMode {
       el('div', { class: 'slider-row' }, [el('label', { text: 'Force' }), strengthInput]),
       el('div', { class: 'row' }, [
         button('Reset water', () => {
+          if (this.boost) this.stopBoost('cancelled');
           this.sim.clearWater();
           toast(this.ui, 'Water cleared — the springs will refill it.');
         }, { class: 'ghost' }),
+        boostBtn,
         el('div', { class: 'spacer' }),
         button('Test run ▶', () => this.testRun(), { class: 'primary' }),
       ]),
