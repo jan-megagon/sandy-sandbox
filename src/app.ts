@@ -72,6 +72,7 @@ export class App {
     window.addEventListener('resize', this.onResize);
     window.addEventListener('orientationchange', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibility);
+    this.renderer.onContextLost = () => this.handleContextLost();
 
     this.showMenu();
     requestAnimationFrame(this.frame);
@@ -80,6 +81,28 @@ export class App {
   private onResize = (): void => {
     this.renderer.resize();
   };
+
+  /**
+   * The GPU took the context away and every GL object with it. Rebuilding the
+   * whole renderer mid-run would silently lose an in-progress attempt, so stop
+   * and hand the choice to the player.
+   */
+  private handleContextLost(): void {
+    this.running = false;
+    clear(this.ui);
+    this.ui.append(
+      el('div', { class: 'screen' }, [
+        el('div', { class: 'spacer' }),
+        el('h1', { class: 'title', text: 'Graphics interrupted' }),
+        el('p', {
+          class: 'subtitle',
+          text: 'The browser reclaimed the graphics context, which can happen after the app has been in the background for a while. Reload to carry on - your saved levels are untouched.',
+        }),
+        el('div', { class: 'spacer' }),
+        button('Reload', () => location.reload(), { class: 'primary' }),
+      ]),
+    );
+  }
 
   private onVisibility = (): void => {
     // Coming back from the background must not deliver one enormous timestep.

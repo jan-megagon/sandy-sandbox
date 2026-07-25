@@ -97,6 +97,21 @@ raw and about 6 KB once sculpted, which is small enough to put in a URL.
 See [TUNING.md](TUNING.md) for the constants that govern how the river and the
 boat feel, and why they're set where they are.
 
+## Performance
+
+At the default 128×128 grid, one 1/60 s update — sources, solver and boat —
+costs about **0.6 ms** on a desktop-class CPU, against a 16.7 ms frame budget,
+with a 1.0 ms worst case. Packing the water field for upload adds 0.05 ms.
+There's a lot of headroom for a phone, which is the point of keeping the grid
+modest and the solver in flat typed arrays.
+
+Opening a level costs ~400 ms, almost all of it priming the river.
+
+The fragment shader is the part that hasn't been measured on real mobile
+hardware — the only GPU available here is a software rasteriser, so its timings
+say nothing useful. The water branch is the expensive one, and it only runs for
+the few percent of pixels that are wet.
+
 ## Known limits
 
 - Levels are fixed at 128×128 cells (2 m each, so 256 m of river). The format

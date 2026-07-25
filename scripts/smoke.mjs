@@ -320,6 +320,21 @@ await page.waitForTimeout(1500);
 check('bad share code is rejected gracefully', await page.locator('.toast.error').isVisible());
 check('app still usable after a bad code', await page.locator('.screen').isVisible());
 
+// --- context loss -----------------------------------------------------------
+// Phones drop the WebGL context routinely; the app must say so rather than
+// going black. WEBGL_lose_context simulates exactly what the driver does.
+console.log('resilience');
+await page.evaluate(() => {
+  const gl = document.getElementById('view').getContext('webgl2');
+  gl.getExtension('WEBGL_lose_context').loseContext();
+});
+await page.waitForTimeout(900);
+check(
+  'context loss is explained, not a black screen',
+  (await page.locator('.title').first().innerText()).includes('Graphics'),
+);
+await page.screenshot({ path: `${OUT}/10-context-lost.png` });
+
 // --- console ----------------------------------------------------------------
 check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 

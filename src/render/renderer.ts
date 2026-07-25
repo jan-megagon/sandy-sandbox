@@ -43,6 +43,11 @@ export class Renderer {
   private spritePass: SpritePass;
   private gridRef: Grid;
 
+  /** True once the GPU has dropped the context and not given it back. */
+  contextLost = false;
+  /** Called when the context is lost, so the app can tell the player. */
+  onContextLost: (() => void) | null = null;
+
   constructor(
     readonly canvas: HTMLCanvasElement,
     grid: Grid,
@@ -52,6 +57,17 @@ export class Renderer {
     this.worldPass = new WorldPass(this.gl, grid);
     this.spritePass = new SpritePass(this.gl);
     this.camera = new Camera();
+
+    // Phones drop the WebGL context routinely - backgrounding the tab, memory
+    // pressure, the GPU process restarting. Every GL object becomes invalid, so
+    // carrying on would throw on each frame and leave a black screen with no
+    // explanation. Catch it and say so instead.
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.contextLost = true;
+      this.onContextLost?.();
+    });
+
     this.resize();
   }
 
@@ -113,6 +129,7 @@ export class Renderer {
   }
 
   render(scene: Scene): void {
+    if (this.contextLost) return;
     const gl = this.gl;
     gl.clearColor(0.055, 0.065, 0.085, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
