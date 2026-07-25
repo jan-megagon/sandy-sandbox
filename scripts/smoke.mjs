@@ -214,6 +214,112 @@ check('undo restores terrain', Math.abs(sumUndone - sumBefore) < 0.5, `${sumUndo
 
 void terrainBefore;
 
+// --- winning a run ----------------------------------------------------------
+// Paddling the whole river reliably is not something a script should attempt,
+// so put the boat on the goal and check the rules fire: state, results panel
+// and recorded best time.
+console.log('finish');
+// Leaving the editor with unsaved paint pops a confirmation first.
+await page.locator('.top-bar button').first().click();
+await page.waitForTimeout(400);
+const discard = page.getByRole('button', { name: 'Discard changes' });
+if (await discard.isVisible().catch(() => false)) {
+  check('unsaved changes are guarded', true);
+  await discard.click();
+  await page.waitForTimeout(500);
+}
+await page.locator('.level-card button.primary').first().click();
+await page.waitForTimeout(2200);
+
+await page.evaluate(() => {
+  const s = window.__session;
+  s.kayak.x = s.level.goal.x;
+  s.kayak.y = s.level.goal.y;
+});
+await page.waitForTimeout(600);
+check('reaching the goal wins', (await page.evaluate(() => window.__session?.state)) === 'won');
+check('results panel appears', await page.locator('.sheet-card').isVisible());
+check('finish time shown', await page.locator('.result-time').isVisible());
+await page.screenshot({ path: `${OUT}/07-won.png` });
+
+const best = await page.evaluate(() =>
+  JSON.parse(localStorage.getItem('river.best.v1') || '{}'),
+);
+check('best time recorded', Object.keys(best).length > 0, JSON.stringify(best));
+
+// --- level lifecycle: create, save, share, import ---------------------------
+console.log('levels');
+await page.getByRole('button', { name: 'Level list' }).click();
+await page.waitForTimeout(500);
+
+const countBefore = await page.locator('.level-card').count();
+await page.getByRole('button', { name: 'New level' }).click();
+await page.waitForTimeout(1500);
+check('new level opens the editor', await page.locator('.tool-row').isVisible());
+
+// Place a start and a goal so it becomes playable, then save.
+await page.getByRole('button', { name: /Start/ }).click();
+await page.touchscreen.tap(size.width * 0.5, size.height * 0.22);
+await page.waitForTimeout(150);
+await page.getByRole('button', { name: /Goal/ }).click();
+await page.touchscreen.tap(size.width * 0.45, size.height * 0.34);
+await page.waitForTimeout(150);
+check(
+  'entities land on the level',
+  await page.evaluate(() => !!(window.__editor?.level.start && window.__editor?.level.goal)),
+);
+
+await page.getByRole('button', { name: 'Save' }).click();
+await page.waitForTimeout(800);
+await page.locator('.top-bar button').first().click();
+await page.waitForTimeout(700);
+check('saved level is listed', (await page.locator('.level-card').count()) === countBefore + 1);
+
+// Share the first level, then re-import its code through the URL.
+await page.locator('.level-card button.ghost').first().click();
+await page.waitForTimeout(300);
+await page.getByRole('button', { name: 'Share', exact: true }).click();
+await page.waitForTimeout(700);
+const code = await page.locator('textarea').inputValue();
+check('share code produced', code.length > 100 && /^[A-Za-z0-9_-]+$/.test(code), `${code.length} chars`);
+await page.screenshot({ path: `${OUT}/08-share.png` });
+await page.getByRole('button', { name: 'Done' }).click();
+await page.waitForTimeout(300);
+
+const beforeImport = await page.locator('.level-card').count();
+
+// Opening a share link while the app is already open is only a fragment
+// change, so it arrives as hashchange rather than a page load.
+await page.evaluate((c) => {
+  location.hash = `#code=${c}`;
+}, code);
+await page.waitForTimeout(2500);
+check(
+  'share link imports while the app is running',
+  (await page.locator('.level-card').count()) === beforeImport + 1,
+);
+check('url is cleaned after import', !page.url().includes('#code='));
+
+// And the cold path: a share link opened in a fresh page load. The query
+// string is what forces a real document load - a bare fragment change would
+// be handled same-document by the listener above and prove nothing.
+const beforeCold = await page.locator('.level-card').count();
+await page.goto(`${url}/?cold=1#code=${code}`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(3000);
+check(
+  'share link imports on a cold load',
+  (await page.locator('.level-card').count()) === beforeCold + 1,
+);
+await page.screenshot({ path: `${OUT}/09-imported.png` });
+
+// A corrupt code must be rejected with a message, not a crash.
+await page.evaluate(() => {
+  location.hash = '#code=obviously-not-valid';
+});
+await page.waitForTimeout(1500);
+check('bad share code is rejected gracefully', await page.locator('.toast.error').isVisible());
+check('app still usable after a bad code', await page.locator('.screen').isVisible());
+
 // --- console ----------------------------------------------------------------
 check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 

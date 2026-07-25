@@ -14,14 +14,25 @@ async function main(): Promise<void> {
   const demo = await seedDemoLevel();
   const app = new App(canvas, ui, demo);
 
-  // A shared level arrives as a URL fragment; import it, then clean the URL so
-  // a refresh doesn't import it a second time.
-  const hash = location.hash;
-  if (hash.startsWith('#code=')) {
-    const imported = await app.importCode(hash.slice(6));
+  /**
+   * A shared level arrives as a URL fragment. Import it, then clean the URL so
+   * a refresh doesn't import a second copy.
+   */
+  const importFromHash = async (): Promise<void> => {
+    const hash = location.hash;
+    if (!hash.startsWith('#code=')) return;
+    // On failure importCode leaves the current screen alone and shows why.
+    // Navigating here instead would clear the UI layer and take the
+    // explanation with it.
+    await app.importCode(hash.slice(6));
     history.replaceState(null, '', location.pathname + location.search);
-    if (!imported) app.showMenu();
-  }
+  };
+
+  // Opening a share link while the app is already running only changes the
+  // fragment, which is a same-document navigation - nothing reloads and no
+  // module re-runs. Without this listener those links would quietly do nothing.
+  window.addEventListener('hashchange', () => void importFromHash());
+  await importFromHash();
 }
 
 function showFatalError(message: string): void {
