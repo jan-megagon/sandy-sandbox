@@ -36,6 +36,20 @@ It checks the things unit tests can't reach — that WebGL comes up, the river
 actually renders, paddling moves the boat, the brush changes the terrain and
 undo puts it back. Screenshots land in `screenshots/`.
 
+## Deploying
+
+`.github/workflows/deploy.yml` builds and publishes to GitHub Pages on every
+push to `main`, and can be run by hand from the Actions tab. It types, tests and
+builds, then uploads `dist/` as the Pages artifact — nothing is committed to a
+`gh-pages` branch.
+
+One-time setup: **Settings → Pages → Build and deployment → Source: GitHub
+Actions**. The site then lands at `https://<owner>.github.io/<repo>/`.
+
+The build needs no configuration for that subpath — `base: './'` in
+`vite.config.ts` makes every asset reference relative, and share links are built
+from `location.origin + location.pathname`, so they carry the subpath too.
+
 ## Playing
 
 **Tap** the left or right half of the screen for a paddle stroke on that side.
