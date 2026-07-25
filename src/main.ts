@@ -1,6 +1,10 @@
 import { App, seedDemoLevel } from './app';
 import './styles.css';
 
+// Tells the boot guard in index.html that the module reached its own code, so
+// from here on failures are reported by showFatalError below rather than by it.
+(window as unknown as { __riverBooted?: boolean }).__riverBooted = true;
+
 /**
  * Bootstrap. Everything that can fail at startup - no WebGL2, a corrupt store,
  * a bad share link - fails here with a message a person can act on, rather

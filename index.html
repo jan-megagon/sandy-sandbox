@@ -21,6 +21,71 @@
   <body>
     <canvas id="view"></canvas>
     <div id="ui"></div>
+    <script>
+      /*
+       * main.ts reports its own startup failures, but only once it is running.
+       * If the module never loads at all - a 404, a stale cache, an extension
+       * blocking it - that reporting goes down with it and the page is left as
+       * a bare dark canvas with nothing to act on. This covers that gap.
+       *
+       * It also names the status the script URL actually returns, because the
+       * failures that get here are the ones you'd otherwise need devtools to
+       * see, and the phone this is built for hasn't got any.
+       */
+      (function () {
+        var BOOT_TIMEOUT_MS = 10000;
+        var reported = false;
+
+        function booted() {
+          return window.__riverBooted === true;
+        }
+
+        function report(reason) {
+          if (reported || booted()) return;
+          reported = true;
+
+          var ui = document.getElementById('ui');
+          if (!ui) return;
+          ui.innerHTML =
+            '<div class="screen"><div class="spacer"></div>' +
+            '<h1 class="title">Can\'t load</h1>' +
+            '<p class="subtitle"></p>' +
+            '<div class="spacer"></div></div>';
+          var p = ui.querySelector('.subtitle');
+          if (!p) return;
+          p.textContent = reason;
+
+          var tag = document.querySelector('script[type="module"]');
+          var src = tag && tag.src;
+          if (!src || typeof fetch !== 'function') return;
+          fetch(src, { cache: 'reload' }).then(
+            function (r) {
+              p.textContent = reason + ' The script at ' + src + ' returned ' + r.status + ' ' + r.statusText + '.';
+            },
+            function (e) {
+              p.textContent = reason + ' The request for ' + src + ' was blocked (' + e.message + ').';
+            }
+          );
+        }
+
+        // Capture phase, because resource load errors don't bubble.
+        window.addEventListener(
+          'error',
+          function (e) {
+            if (e.target && e.target.tagName === 'SCRIPT') {
+              report('The app script did not load.');
+            } else if (!booted()) {
+              report('The app failed to start.');
+            }
+          },
+          true
+        );
+
+        setTimeout(function () {
+          report('The app did not start.');
+        }, BOOT_TIMEOUT_MS);
+      })();
+    </script>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
