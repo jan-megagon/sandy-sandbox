@@ -520,6 +520,9 @@ export class EditorMode {
   // --- ui -------------------------------------------------------------------
 
   private setTool(tool: Tool): void {
+    // Reaching for a tool is itself the decision to stop moving the view, so
+    // don't make it a second tap on the Move button first.
+    if (this.panOnly) this.setPanOnly(false);
     this.tool = tool;
     for (const [id, btn] of this.toolButtons) {
       btn.setAttribute('aria-pressed', String(id === tool));
@@ -672,6 +675,9 @@ export class EditorMode {
     const top = this.topBarNode ? this.topBarNode.getBoundingClientRect().height : 0;
     const bottom = this.dockNode ? this.dockNode.getBoundingClientRect().height : 0;
     this.renderer.camera.setInsets(top * ratio, bottom * ratio);
+    // The toast has to clear the dock, and the dock's height depends on which
+    // tool is selected, so it is published rather than guessed at in the CSS.
+    this.ui.style.setProperty('--dock-height', `${Math.round(bottom)}px`);
     if (!this.viewTouched) this.renderer.camera.coverLevelInFreeArea(levelGrid(this.level));
   }
 
@@ -693,7 +699,6 @@ export class EditorMode {
     this.gestures.singlePointerPans = on;
     this.brushCursor = null;
     this.panButton?.setAttribute('aria-pressed', String(on));
-    for (const btn of this.toolButtons.values()) btn.disabled = on;
     this.refreshToolPanels();
     this.refreshHint();
   }
@@ -737,6 +742,10 @@ export class EditorMode {
     this.level.updatedAt = Date.now();
     try {
       await this.callbacks.onSave(this.level);
+      // Keep the river with it. A level opened from the list otherwise plays on
+      // whatever a few seconds of priming manages, which is a nearly dry valley
+      // however long you spent filling this one.
+      await saveSettledWater(this.level, this.sim.depth);
       this.unsavedChanges = false;
       toast(this.ui, 'Saved.');
     } catch (err) {

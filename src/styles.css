@@ -69,6 +69,17 @@ body {
   pointer-events: auto;
 }
 
+/*
+ * The toast is a notice, not a control, and it sits over the tool row. It sets
+ * pointer-events: none itself, but `#ui > *` above is an id selector and beats
+ * a class, so without restating it here at matching specificity the toast wins
+ * the wrong way - and because it only fades to opacity 0 rather than being
+ * removed, it goes on swallowing taps long after it is invisible.
+ */
+#ui > .toast {
+  pointer-events: none;
+}
+
 /* --- shared controls ------------------------------------------------------ */
 
 button {
@@ -531,7 +542,7 @@ textarea {
 .toast {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--safe-bottom) + 96px);
+  bottom: calc(var(--dock-height, 96px) + 12px);
   transform: translateX(-50%);
   background: rgba(12, 20, 36, 0.96);
   border: 1px solid var(--edge);

@@ -568,17 +568,29 @@ const RESTORE_RELAX_SECONDS = 1.5;
  * Identifies the terrain and springs a settled field was computed for.
  *
  * Any edit to either invalidates the water, and this is what notices. FNV-1a
- * over the raw terrain bytes plus the source list - not cryptographic, just
- * enough that a changed valley never passes for an unchanged one.
+ * over the terrain plus the source list - not cryptographic, just enough that a
+ * changed valley never passes for an unchanged one.
+ *
+ * It hashes terrain *as the wire format stores it*, not as it sits in memory.
+ * Saving a level quantises its heights to 12 bits, so a fingerprint taken over
+ * raw floats would never match again once the level had been through storage -
+ * which is precisely the case this cache exists for. Quantising first makes it
+ * survive the round trip, and still moves for any edit big enough to store.
  */
 export function waterFingerprint(level: Level): string {
   let hash = 0x811c9dc5;
-  const bytes = new Uint8Array(level.terrain.buffer, level.terrain.byteOffset, level.terrain.byteLength);
-  for (let i = 0; i < bytes.length; i++) {
-    hash ^= bytes[i];
+  const scale = TERRAIN_LEVELS / TERRAIN_MAX;
+  for (let i = 0; i < level.terrain.length; i++) {
+    const q = Math.round(Math.min(TERRAIN_MAX, Math.max(0, level.terrain[i])) * scale);
+    hash ^= q & 0xff;
+    hash = Math.imul(hash, 0x01000193);
+    hash ^= (q >>> 8) & 0xff;
     hash = Math.imul(hash, 0x01000193);
   }
-  const tail = `${level.width}x${level.height}x${level.cellSize}|${JSON.stringify(level.sources)}`;
+  // Field by field rather than JSON: decoding rebuilds these objects with the
+  // keys in a different order, and stringify would call that a different level.
+  let tail = `${level.width}x${level.height}x${level.cellSize}`;
+  for (const s of level.sources) tail += `|${s.x},${s.y},${s.rate},${s.radius}`;
   for (let i = 0; i < tail.length; i++) {
     hash ^= tail.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);

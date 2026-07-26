@@ -213,12 +213,40 @@ describe('settled water cache', () => {
     expect(waterFingerprint(createDemoLevel())).toBe(before);
 
     const sculpted = createDemoLevel();
-    sculpted.terrain[4242] += 0.5;
+    sculpted.terrain[8000] += 0.5;
     expect(waterFingerprint(sculpted)).not.toBe(before);
+
+    // Raising ground that is already at the ceiling changes nothing the format
+    // can store, so it rightly leaves the fingerprint - and the water - alone.
+    const capped = createDemoLevel();
+    expect(capped.terrain[4242]).toBe(40);
+    capped.terrain[4242] += 0.5;
+    expect(waterFingerprint(capped)).toBe(before);
+    // Digging into it does, because that is a height the format can represent.
+    capped.terrain[4242] = 39;
+    expect(waterFingerprint(capped)).not.toBe(before);
 
     const moved = createDemoLevel();
     moved.sources = moved.sources.map((s) => ({ ...s, rate: s.rate + 0.1 }));
     expect(waterFingerprint(moved)).not.toBe(before);
+  });
+
+  it('keeps the same fingerprint after a level has been through storage', async () => {
+    // Saving quantises terrain to 12 bits. A fingerprint taken over raw floats
+    // changes across that round trip, so a level opened from the list would
+    // reject its own water - which is the case the cache is for.
+    const level = createDemoLevel();
+    const before = waterFingerprint(level);
+    const reloaded = await decodeLevel(await encodeLevel(level));
+    expect(waterFingerprint(reloaded)).toBe(before);
+  });
+
+  it('still notices a real edit through that quantisation', async () => {
+    const level = createDemoLevel();
+    const reloaded = await decodeLevel(await encodeLevel(level));
+    const base = waterFingerprint(reloaded);
+    reloaded.terrain[8000] += 0.5;
+    expect(waterFingerprint(reloaded)).not.toBe(base);
   });
 
   it('restores a field and gets the current moving again', () => {
