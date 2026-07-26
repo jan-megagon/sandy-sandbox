@@ -81,6 +81,14 @@ took. The demo valley settles after about 200 s of simulation. Press it again
 to stop early; editing anything cancels it, since the run is settling the
 ground as it stood when it started.
 
+A settled river is saved beside the level, so filling it is something you do
+once rather than every time you open it — about 3 KB for a 128×128 valley,
+since most of a map is dry and deflates to nothing. It is a cache, not part of
+the level: water is derivable from terrain and springs, and share codes stay
+small enough for a URL. Change either and the stored river no longer matches
+the valley it was computed for, so it is discarded and the level primes from
+scratch.
+
 Levels are stored in the browser and can be shared as a link or a code —
 terrain and all, no server involved.
 

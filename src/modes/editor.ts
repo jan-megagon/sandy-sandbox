@@ -1,9 +1,11 @@
 import { GestureRecognizer } from '../input/gestures';
 import type { Renderer, Scene } from '../render/renderer';
+import { loadSettledWater, saveSettledWater } from '../storage';
 import {
   type Level,
   SETTLE_DT,
   SettleRun,
+  applySettledWater,
   buildSim,
   levelGrid,
   primeSim,
@@ -118,6 +120,10 @@ export class EditorMode {
     // the valley in real time would mean minutes of staring at dry ground
     // before an edit shows you anything.
     primeSim(this.sim, toSimSources(level), { maxSeconds: 4 });
+    // If this valley has been filled before, the settled river replaces the
+    // primed one as soon as it inflates - a frame or two, not the seconds it
+    // would take to compute again.
+    void this.restoreSettledWater();
 
     this.renderer.setGrid(levelGrid(level));
     this.renderer.uploadTerrain(level.terrain);
@@ -439,10 +445,27 @@ export class EditorMode {
     if (reason === 'cancelled') {
       toast(this.ui, `Stopped after ${seconds} s of fast-forward.`);
     } else if (report.settled) {
-      toast(this.ui, `River settled after ${seconds} s.`);
+      // Worth keeping: this is the expensive result, and nothing about the
+      // level has changed since it was computed.
+      void saveSettledWater(this.level, this.sim.depth);
+      toast(this.ui, `River settled after ${seconds} s — saved for next time.`);
     } else {
       toast(this.ui, `Fast-forwarded ${seconds} s — still filling.`);
     }
+  }
+
+  /**
+   * Swap in a previously settled river, if one was stored for this exact
+   * terrain and springs.
+   *
+   * Inflating is asynchronous, so an edit could in principle land first. The
+   * fingerprint would reject the field in that case, but a fill in progress
+   * would not - it is mid-run on the water this would overwrite.
+   */
+  private async restoreSettledWater(): Promise<void> {
+    const depth = await loadSettledWater(this.level);
+    if (!depth || this.boost || this.hasUnsavedChanges) return;
+    applySettledWater(this.sim, toSimSources(this.level), depth);
   }
 
   private refreshBoostButton(): void {

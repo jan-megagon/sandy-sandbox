@@ -3,6 +3,10 @@ import { createDemoLevel } from '../src/levels/demo';
 import {
   SETTLED_RATE,
   SettleRun,
+  applySettledWater,
+  decodeWater,
+  encodeWater,
+  waterFingerprint,
   buildSim,
   createLevel,
   decodeLevel,
@@ -166,5 +170,79 @@ describe('settling', () => {
       worst = Math.max(worst, Math.abs(whole.depth[i] - sliced.depth[i]));
     }
     expect(worst).toBeLessThan(1e-6);
+  });
+});
+
+describe('settled water cache', () => {
+  it('round-trips a depth field within the stored quantum', async () => {
+    const level = createDemoLevel();
+    const sim = buildSim(level);
+    primeSim(sim, toSimSources(level), { maxSeconds: 4 });
+
+    const back = await decodeWater(await encodeWater(sim.depth), sim.depth.length);
+    expect(back).not.toBeNull();
+    let worst = 0;
+    for (let i = 0; i < sim.depth.length; i++) {
+      worst = Math.max(worst, Math.abs((back as Float32Array)[i] - sim.depth[i]));
+    }
+    // Stored to the centimetre, so half of one is the most it can be out.
+    expect(worst).toBeLessThanOrEqual(0.005);
+  });
+
+  it('compresses a river to something worth storing', async () => {
+    const level = createDemoLevel();
+    const sim = buildSim(level);
+    primeSim(sim, toSimSources(level), { maxSeconds: 4 });
+
+    const code = await encodeWater(sim.depth);
+    // Raw would be two bytes a cell; most of a map is dry and deflates away.
+    expect(code.length).toBeLessThan(sim.depth.length * 2 * 0.25);
+  });
+
+  it('treats an unusable cache as a miss rather than an error', async () => {
+    expect(await decodeWater('not a real code', 16384)).toBeNull();
+    const level = createDemoLevel();
+    const sim = buildSim(level);
+    // Right code, wrong grid: a level that was resized must not load old water.
+    expect(await decodeWater(await encodeWater(sim.depth), 999)).toBeNull();
+  });
+
+  it('fingerprints terrain and springs, so an edit invalidates the water', () => {
+    const level = createDemoLevel();
+    const before = waterFingerprint(level);
+    expect(waterFingerprint(createDemoLevel())).toBe(before);
+
+    const sculpted = createDemoLevel();
+    sculpted.terrain[4242] += 0.5;
+    expect(waterFingerprint(sculpted)).not.toBe(before);
+
+    const moved = createDemoLevel();
+    moved.sources = moved.sources.map((s) => ({ ...s, rate: s.rate + 0.1 }));
+    expect(waterFingerprint(moved)).not.toBe(before);
+  });
+
+  it('restores a field and gets the current moving again', () => {
+    const level = createDemoLevel();
+    const settled = buildSim(level);
+    const sources = toSimSources(level);
+    primeSim(settled, sources, { maxSeconds: 20 });
+    const saved = new Float32Array(settled.depth);
+
+    const fresh = buildSim(level);
+    applySettledWater(fresh, sources, saved);
+
+    let drift = 0;
+    for (let i = 0; i < saved.length; i++) {
+      drift = Math.max(drift, Math.abs(fresh.depth[i] - saved[i]));
+    }
+    // The river that was saved is the river you get back.
+    expect(drift).toBeLessThan(0.5);
+
+    // Only depth is stored, so the relax has to rebuild the flow the boat reads.
+    let fastest = 0;
+    for (let i = 0; i < fresh.vx.length; i++) {
+      fastest = Math.max(fastest, Math.hypot(fresh.vx[i], fresh.vy[i]));
+    }
+    expect(fastest).toBeGreaterThan(0.1);
   });
 });

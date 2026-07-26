@@ -1,4 +1,12 @@
-import { type Level, buildSim, levelGrid, primeSim, toSimSources } from '../sim/level';
+import { loadSettledWater } from '../storage';
+import {
+  type Level,
+  applySettledWater,
+  buildSim,
+  levelGrid,
+  primeSim,
+  toSimSources,
+} from '../sim/level';
 import type { Grid } from '../sim/grid';
 import type { WaterSim } from '../sim/water';
 import { Kayak, type PaddleSide } from './kayak';
@@ -45,7 +53,15 @@ export class Session {
     // Fill the riverbed before the player takes control, so a run starts on a
     // flowing river rather than watching the water arrive.
     primeSim(this.sim, this.sources);
+    // A river this level has already settled beats one primed from scratch, and
+    // it lands within a frame or two of the run starting.
+    void this.restoreSettledWater();
     this.resetBoat();
+  }
+
+  private async restoreSettledWater(): Promise<void> {
+    const depth = await loadSettledWater(this.level);
+    if (depth) applySettledWater(this.sim, this.sources, depth);
   }
 
   private resetBoat(): void {

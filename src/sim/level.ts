@@ -548,6 +548,98 @@ async function inflate(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<Array
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+// ---------------------------------------------------------------------------
+// Settled water
+//
+// A filled river is expensive to compute and cheap to store, so it is worth
+// keeping once someone has waited for it. It is deliberately *not* part of the
+// level format: water is derivable from terrain and springs, and share codes
+// are kept small enough to put in a URL. This is a cache beside the level, not
+// a property of it.
+// ---------------------------------------------------------------------------
+
+/** Depth quantum for the cache, in metres. A centimetre is far below the eye. */
+const WATER_QUANTUM = 0.01;
+
+/** Seconds of solver run after a restore, to rebuild flow from the depths. */
+const RESTORE_RELAX_SECONDS = 1.5;
+
+/**
+ * Identifies the terrain and springs a settled field was computed for.
+ *
+ * Any edit to either invalidates the water, and this is what notices. FNV-1a
+ * over the raw terrain bytes plus the source list - not cryptographic, just
+ * enough that a changed valley never passes for an unchanged one.
+ */
+export function waterFingerprint(level: Level): string {
+  let hash = 0x811c9dc5;
+  const bytes = new Uint8Array(level.terrain.buffer, level.terrain.byteOffset, level.terrain.byteLength);
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i];
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const tail = `${level.width}x${level.height}x${level.cellSize}|${JSON.stringify(level.sources)}`;
+  for (let i = 0; i < tail.length; i++) {
+    hash ^= tail.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** Compress a settled depth field. Dry cells are zeros, which deflate loves. */
+export async function encodeWater(depth: Float32Array): Promise<string> {
+  const out = new Uint16Array(depth.length);
+  for (let i = 0; i < depth.length; i++) {
+    const q = Math.round(depth[i] / WATER_QUANTUM);
+    out[i] = q < 0 ? 0 : q > 65535 ? 65535 : q;
+  }
+  const bytes = new Uint8Array(out.buffer);
+  return toBase64Url(await deflate(bytes));
+}
+
+/**
+ * Inflate a settled depth field, or null if it is unusable.
+ *
+ * A cache is never worth an exception: anything wrong with it just means
+ * priming the level the slow way, which is what would have happened anyway.
+ */
+export async function decodeWater(code: string, cells: number): Promise<Float32Array | null> {
+  try {
+    const bytes = await inflate(fromBase64Url(code.trim()));
+    if (bytes.byteLength !== cells * 2) return null;
+    const q = new Uint16Array(bytes.buffer, bytes.byteOffset, cells);
+    const depth = new Float32Array(cells);
+    for (let i = 0; i < cells; i++) depth[i] = q[i] * WATER_QUANTUM;
+    return depth;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Put a cached field back into a simulation and get it moving again.
+ *
+ * Only depth is stored, so the water arrives with no momentum: the flux and
+ * velocity fields are empty and the boat would read a dead river. A short run
+ * rebuilds them from the depths that are already there. Measured on the demo,
+ * the field drifts by at most 0.25 m in a cell over that first second - the
+ * shape of the river is what was saved.
+ */
+export function applySettledWater(
+  sim: WaterSim,
+  sources: readonly WaterSource[],
+  depth: Float32Array,
+): void {
+  sim.depth.set(depth);
+  let max = 0;
+  for (let i = 0; i < depth.length; i++) if (depth[i] > max) max = depth[i];
+  // substepsFor reads this, and it is otherwise stale from before the restore.
+  sim.maxDepth = max;
+
+  const run = new SettleRun(sim, sources, { maxSeconds: RESTORE_RELAX_SECONDS });
+  while (!run.done) run.advance(RESTORE_RELAX_SECONDS);
+}
+
 /** Encode a level to a compact, URL-safe share code. */
 export async function encodeLevel(level: Level): Promise<string> {
   const meta: LevelMeta = {

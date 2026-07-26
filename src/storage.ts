@@ -1,4 +1,12 @@
-import { type Level, decodeLevel, encodeLevel, isPlayable } from './sim/level';
+import {
+  type Level,
+  decodeLevel,
+  decodeWater,
+  encodeLevel,
+  encodeWater,
+  isPlayable,
+  waterFingerprint,
+} from './sim/level';
 
 /**
  * Level persistence in localStorage.
@@ -12,6 +20,7 @@ import { type Level, decodeLevel, encodeLevel, isPlayable } from './sim/level';
 const INDEX_KEY = 'river.index.v1';
 const LEVEL_PREFIX = 'river.level.v1.';
 const BEST_KEY = 'river.best.v1';
+const WATER_PREFIX = 'river.water.v1.';
 
 export interface LevelSummary {
   id: string;
@@ -90,10 +99,51 @@ export async function loadLevel(id: string): Promise<Level | null> {
 
 export function deleteLevel(id: string): void {
   localStorage.removeItem(LEVEL_PREFIX + id);
+  clearSettledWater(id);
   writeJson(
     INDEX_KEY,
     readIndex().filter((e) => e.id !== id),
   );
+}
+
+// --- settled water ---------------------------------------------------------
+//
+// Filling a river costs seconds of solver; storing the result costs a few KB.
+// This is a cache, so every path through it treats a miss as normal and never
+// as an error - the fallback is priming the level, which is what the app did
+// before this existed.
+
+interface WaterEntry {
+  /** Terrain and springs the field was settled for. */
+  fp: string;
+  /** Deflated, base64url depth field. */
+  data: string;
+}
+
+/** Remember a settled river so opening this level again doesn't re-run it. */
+export async function saveSettledWater(level: Level, depth: Float32Array): Promise<void> {
+  try {
+    const entry: WaterEntry = {
+      fp: waterFingerprint(level),
+      data: await encodeWater(depth),
+    };
+    writeJson(WATER_PREFIX + level.id, entry);
+  } catch (err) {
+    // A full quota is the likely cause, and a level that opens slowly is a
+    // much smaller problem than one that won't open.
+    console.warn(`Settled water for ${level.id} could not be stored`, err);
+  }
+}
+
+/** The settled river for this level, or null if there isn't a usable one. */
+export async function loadSettledWater(level: Level): Promise<Float32Array | null> {
+  const entry = readJson<WaterEntry | null>(WATER_PREFIX + level.id, null);
+  if (!entry || entry.fp !== waterFingerprint(level)) return null;
+  return decodeWater(entry.data, level.width * level.height);
+}
+
+export function clearSettledWater(id: string): void {
+  localStorage.removeItem(WATER_PREFIX + id);
 }
 
 export function getBestTime(id: string): number | undefined {
