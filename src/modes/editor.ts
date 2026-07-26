@@ -79,6 +79,14 @@ const BOOST_FRAME_BUDGET_MS = 20;
  */
 const BOOST_RENDER_EVERY = 4;
 
+/**
+ * Metres of level that must stay inside the visible strip when panning.
+ *
+ * Enough to see where you are and drag your way back, small enough that you can
+ * still push the level right out to a corner to work on its edge.
+ */
+const KEEP_IN_VIEW_METRES = 24;
+
 export interface EditorCallbacks {
   onExit(): void;
   onTest(level: Level): void;
@@ -107,6 +115,14 @@ export class EditorMode {
   /** Milliseconds of fast-forward already spent in the current frame. */
   private boostSpentMs = 0;
   private boostFrame = 0;
+  private panOnly = false;
+  private panButton: HTMLButtonElement | null = null;
+  private brushRow: HTMLElement | null = null;
+  private topBarNode: HTMLElement | null = null;
+  private dockNode: HTMLElement | null = null;
+  private insetObserver: ResizeObserver | null = null;
+  /** Set once the view has been panned or zoomed, so auto-framing backs off. */
+  private viewTouched = false;
 
   constructor(
     level: Level,
@@ -127,7 +143,7 @@ export class EditorMode {
 
     this.renderer.setGrid(levelGrid(level));
     this.renderer.uploadTerrain(level.terrain);
-    this.renderer.camera.coverLevel(levelGrid(level));
+    this.renderer.camera.coverLevelInFreeArea(levelGrid(level));
 
     this.gestures = new GestureRecognizer({
       onPaintStart: (x, y) => this.handlePointerDown(x, y),
@@ -146,6 +162,8 @@ export class EditorMode {
 
   dispose(): void {
     this.boost = null;
+    this.insetObserver?.disconnect();
+    this.insetObserver = null;
     this.gestures.detach();
     clear(this.ui);
   }
@@ -241,13 +259,14 @@ export class EditorMode {
   }
 
   private handlePanZoom(dx: number, dy: number, scale: number, cx: number, cy: number): void {
+    this.viewTouched = true;
     const ratio = this.renderer.pixelRatio;
     const camera = this.renderer.camera;
     camera.panByScreen(dx * ratio, dy * ratio);
     if (Math.abs(scale - 1) > 0.0005) {
       camera.zoomAt(cx * ratio, cy * ratio, scale);
     }
-    camera.clampToLevel(levelGrid(this.level), 60);
+    camera.keepLevelInView(levelGrid(this.level), KEEP_IN_VIEW_METRES);
   }
 
   private paint(worldX: number, worldY: number): void {
@@ -505,6 +524,7 @@ export class EditorMode {
     for (const [id, btn] of this.toolButtons) {
       btn.setAttribute('aria-pressed', String(id === tool));
     }
+    this.refreshToolPanels();
     this.refreshHint();
   }
 
@@ -526,7 +546,9 @@ export class EditorMode {
     if (missing.length > 0) {
       this.hintNode.textContent = `Add ${missing.join(', ')} to make this playable.`;
     } else {
-      this.hintNode.textContent = 'One finger sculpts · two fingers pan and zoom.';
+      this.hintNode.textContent = this.panOnly
+        ? 'Move mode — drag to pan, pinch to zoom. Nothing you do here edits.'
+        : 'One finger sculpts · two fingers pan and zoom.';
     }
   }
 
@@ -556,6 +578,15 @@ export class EditorMode {
       this.toolButtons.set(t.id, btn);
       toolRow.append(btn);
     }
+
+    const panBtn = el('button', {
+      class: 'pan-toggle',
+      'aria-pressed': 'false',
+      title: 'Pan and zoom without editing',
+      onClick: () => this.setPanOnly(!this.panOnly),
+    }, [el('span', { class: 'glyph', text: '✋' }), el('span', { text: 'Move' })]);
+    this.panButton = panBtn;
+    toolRow.append(panBtn);
 
     const sizeInput = el('input', {
       type: 'range',
@@ -587,11 +618,21 @@ export class EditorMode {
     });
     this.boostButton = boostBtn;
 
+    // Brush settings mean nothing for placing a rock or panning the view, and
+    // they are the tallest thing in the dock. Showing them only when they apply
+    // hands the map back most of that space for most of the time.
+    const brushRow = el('div', { class: 'brush-row' }, [
+      el('label', { text: 'Size' }),
+      sizeInput,
+      el('label', { text: 'Force' }),
+      strengthInput,
+    ]);
+    this.brushRow = brushRow;
+
     const dock = el('div', { class: 'bottom-dock' }, [
       this.hintNode,
       toolRow,
-      el('div', { class: 'slider-row' }, [el('label', { text: 'Size' }), sizeInput]),
-      el('div', { class: 'slider-row' }, [el('label', { text: 'Force' }), strengthInput]),
+      brushRow,
       el('div', { class: 'row' }, [
         button('Reset water', () => {
           if (this.boost) this.stopBoost('cancelled');
@@ -605,6 +646,55 @@ export class EditorMode {
     ]);
 
     this.ui.append(topBar, dock);
+    this.topBarNode = topBar;
+    this.dockNode = dock;
+
+    // The dock changes height as tools come and go, and the camera's idea of
+    // the free strip has to follow it or the level drifts back under the UI.
+    this.insetObserver = new ResizeObserver(() => this.updateViewInsets());
+    this.insetObserver.observe(dock);
+    this.insetObserver.observe(topBar);
+
+    this.refreshToolPanels();
+    this.refreshHint();
+  }
+
+  /**
+   * Tell the camera how much of the screen the UI is covering.
+   *
+   * The dock does not exist when the camera is first framed, so the opening
+   * view is re-framed here once there is something to measure. After that it
+   * only re-frames while the view is untouched: a dock that changes height must
+   * not yank a view the person has positioned themselves.
+   */
+  private updateViewInsets(): void {
+    const ratio = this.renderer.pixelRatio;
+    const top = this.topBarNode ? this.topBarNode.getBoundingClientRect().height : 0;
+    const bottom = this.dockNode ? this.dockNode.getBoundingClientRect().height : 0;
+    this.renderer.camera.setInsets(top * ratio, bottom * ratio);
+    if (!this.viewTouched) this.renderer.camera.coverLevelInFreeArea(levelGrid(this.level));
+  }
+
+  /** Show only the controls the current tool actually uses. */
+  private refreshToolPanels(): void {
+    if (!this.brushRow) return;
+    const wanted = !this.panOnly && TERRAIN_TOOLS.has(this.tool);
+    this.brushRow.hidden = !wanted;
+  }
+
+  /**
+   * Pan-only mode: one finger moves the view instead of sculpting.
+   *
+   * It deliberately does not change the selected tool, so turning it off puts
+   * you back on the brush you were using with the settings you had.
+   */
+  private setPanOnly(on: boolean): void {
+    this.panOnly = on;
+    this.gestures.singlePointerPans = on;
+    this.brushCursor = null;
+    this.panButton?.setAttribute('aria-pressed', String(on));
+    for (const btn of this.toolButtons.values()) btn.disabled = on;
+    this.refreshToolPanels();
     this.refreshHint();
   }
 

@@ -35,6 +35,15 @@ export class GestureRecognizer {
   private lastSpread = 0;
   private attached: HTMLElement | null = null;
 
+  /**
+   * When set, a single finger pans instead of painting.
+   *
+   * Two fingers already pan, but on a phone that is a gesture you make *after*
+   * putting one finger down, and in an editor that first finger has already
+   * dug a trench. This makes navigating a deliberate mode you cannot paint from.
+   */
+  singlePointerPans = false;
+
   constructor(private handlers: GestureHandlers) {}
 
   attach(element: HTMLElement): void {
@@ -85,9 +94,14 @@ export class GestureRecognizer {
     e.preventDefault();
 
     if (this.pointers.size === 1) {
-      this.painting = true;
       this.multiTouch = false;
-      this.handlers.onPaintStart?.(p.x, p.y);
+      if (this.singlePointerPans) {
+        this.painting = false;
+        this.updatePinchReference();
+      } else {
+        this.painting = true;
+        this.handlers.onPaintStart?.(p.x, p.y);
+      }
     } else if (this.pointers.size === 2) {
       // Abandon the stroke the first finger started; this is a pinch.
       if (this.painting) {
@@ -124,6 +138,10 @@ export class GestureRecognizer {
       this.lastSpread = spread;
     } else if (this.painting) {
       this.handlers.onPaintMove?.(p.x, p.y);
+    } else if (this.singlePointerPans) {
+      // Drag with no pinch: pan by the movement, scale unchanged.
+      this.handlers.onPanZoom?.(p.x - this.lastCentre.x, p.y - this.lastCentre.y, 1, p.x, p.y);
+      this.lastCentre = { x: p.x, y: p.y };
     }
   };
 

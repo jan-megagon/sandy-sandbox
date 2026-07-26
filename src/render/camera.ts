@@ -12,6 +12,17 @@ export class Camera {
   minZoom = 2;
   maxZoom = 40;
 
+  /**
+   * Screen edges covered by UI, in device pixels.
+   *
+   * The projection still runs off the middle of the canvas - moving that would
+   * put every world-to-screen conversion out of step with the pointer - but
+   * anything that decides *what to look at* uses the space actually left over.
+   * Without this the editor centres a level behind its own toolbar.
+   */
+  insetTop = 0;
+  insetBottom = 0;
+
   constructor(
     public viewWidth = 1,
     public viewHeight = 1,
@@ -20,6 +31,21 @@ export class Camera {
   setViewport(width: number, height: number): void {
     this.viewWidth = width;
     this.viewHeight = height;
+  }
+
+  setInsets(top: number, bottom: number): void {
+    this.insetTop = Math.max(0, top);
+    this.insetBottom = Math.max(0, bottom);
+  }
+
+  /** Height of the strip that isn't behind UI. */
+  get freeHeight(): number {
+    return Math.max(1, this.viewHeight - this.insetTop - this.insetBottom);
+  }
+
+  /** How far the free strip's centre sits below the canvas centre, in pixels. */
+  get freeOffsetY(): number {
+    return (this.insetTop - this.insetBottom) / 2;
   }
 
   worldToScreenX(wx: number): number {
@@ -108,5 +134,62 @@ export class Camera {
     this.x = worldW / 2;
     this.y = worldH / 2;
     this.clampToLevel(grid);
+  }
+
+  /**
+   * Frame the level in the space the UI leaves, rather than on the canvas.
+   *
+   * Covering the whole canvas puts the middle of the level behind the toolbar,
+   * which is most of a phone screen in the editor. This sizes to the free strip
+   * and lets the level run on underneath the UI, so what you can see is the
+   * middle of the valley rather than the top half of it.
+   */
+  coverLevelInFreeArea(grid: Grid): void {
+    const worldW = grid.width * grid.cellSize;
+    const worldH = grid.height * grid.cellSize;
+    const cover = Math.max(this.viewWidth / worldW, this.freeHeight / worldH);
+    this.zoom = clamp(cover, this.minZoom, this.maxZoom);
+    this.centreOnFreeArea(worldW / 2, worldH / 2);
+  }
+
+  /** Put a world point at the centre of the free strip, not of the canvas. */
+  centreOnFreeArea(worldX: number, worldY: number): void {
+    this.x = worldX;
+    // The projection is about the canvas centre, so to push a point down to the
+    // free strip's centre the camera has to move the other way.
+    this.y = worldY - this.freeOffsetY / this.zoom;
+  }
+
+  /** World point currently at the centre of the free strip. */
+  get freeCentreWorldY(): number {
+    return this.y + this.freeOffsetY / this.zoom;
+  }
+
+  /**
+   * Let the view go anywhere that still shows something of the level.
+   *
+   * `clampToLevel` pins the view inside the level, which is right when
+   * following a boat and wrong in an editor: it snaps to the centre on any axis
+   * where the level is smaller than the screen, so a zoomed-out level cannot be
+   * moved off the toolbar at all. This only insists that `keep` metres of the
+   * level stay inside the free strip, which is enough that you can always find
+   * your way back to it.
+   */
+  keepLevelInView(grid: Grid, keep: number): void {
+    const worldW = grid.width * grid.cellSize;
+    const worldH = grid.height * grid.cellSize;
+    const halfW = this.viewWidth / 2 / this.zoom;
+    const halfH = this.freeHeight / 2 / this.zoom;
+
+    // Never demand more overlap than there is level, or than there is screen.
+    const keepX = Math.min(keep, worldW, halfW * 2);
+    const keepY = Math.min(keep, worldH, halfH * 2);
+
+    this.x = clamp(this.x, keepX - halfW, worldW - keepX + halfW);
+
+    // Clamp what the person actually sees - the free strip - then convert back
+    // to where the camera has to sit for that to be what they see.
+    const centre = clamp(this.freeCentreWorldY, keepY - halfH, worldH - keepY + halfH);
+    this.y = centre - this.freeOffsetY / this.zoom;
   }
 }
