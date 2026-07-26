@@ -36,8 +36,12 @@ void main() {
   vLocal = aCorner;
   float c = cos(uRot);
   float s = sin(uRot);
-  vec2 r = vec2(aCorner.x * c - aCorner.y * s, aCorner.x * s + aCorner.y * c);
-  vec2 world = uPos + r * uSize;
+  // Scale in the shape's own frame, then rotate. The other way round stretches
+  // along the screen axes instead of the hull's, so a kayak drawn longer than
+  // it is wide came out short when it pointed up the screen and long when it
+  // pointed across it.
+  vec2 local = aCorner * uSize;
+  vec2 world = uPos + vec2(local.x * c - local.y * s, local.x * s + local.y * c);
   vec2 clip = (world - uCamera) / uHalfExtent;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
 }`;
