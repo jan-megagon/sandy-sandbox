@@ -31,6 +31,12 @@ interface AppMode {
   update(dt: number): void;
   buildScene(time: number): Scene;
   dispose(): void;
+  /**
+   * Frames this mode would rather spend on work than on a redraw. Used by the
+   * editor's fast-forward, where the picture only has to change often enough
+   * to watch the river fill and every skipped redraw goes to the solver.
+   */
+  skipRender?(): boolean;
 }
 
 /**
@@ -128,7 +134,11 @@ export class App {
     // If we fell far behind, drop the backlog rather than spiralling.
     if (this.accumulator > FIXED_STEP * 6) this.accumulator = 0;
 
-    this.renderer.render(this.mode.buildScene(this.clock));
+    // Built every frame even when the redraw is skipped: it is the one call
+    // that lands exactly once per frame, so a mode can use it to close off
+    // whatever it was doing across that frame's updates.
+    const scene = this.mode.buildScene(this.clock);
+    if (this.mode.skipRender?.() !== true) this.renderer.render(scene);
   };
 
   /**

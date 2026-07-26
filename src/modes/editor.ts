@@ -1,6 +1,14 @@
 import { GestureRecognizer } from '../input/gestures';
 import type { Renderer, Scene } from '../render/renderer';
-import { type Level, SettleRun, buildSim, levelGrid, primeSim, toSimSources } from '../sim/level';
+import {
+  type Level,
+  SETTLE_DT,
+  SettleRun,
+  buildSim,
+  levelGrid,
+  primeSim,
+  toSimSources,
+} from '../sim/level';
 import { type BrushMode, type DirtyRect, applyBrush, unionRect } from '../sim/terrain';
 import type { WaterSim } from '../sim/water';
 import { button, clear, el, sheet, toast } from '../ui/dom';
@@ -48,11 +56,26 @@ const MAX_UNDO = 12;
 const BOOST_MAX_SECONDS = 300;
 
 /**
- * Wall-clock milliseconds per frame to spend fast-forwarding. Kept under a
- * frame so the river is visibly filling while it runs; blocking on the whole
- * job would freeze the editor for seconds and show nothing until it finished.
+ * Wall-clock milliseconds per frame to spend fast-forwarding.
+ *
+ * This is what actually governs how long a fill takes: the solver needs a
+ * fixed amount of work done, and at this rate it needs work/budget frames to
+ * get through it whatever the device. It sits above a frame's 16.7 ms because
+ * three frames in four skip their redraw entirely (BOOST_RENDER_EVERY) and
+ * have nothing else to spend the time on. Turn it down if a fill feels rough,
+ * up if it feels slow - it trades smoothness for how soon the river is ready.
  */
-const BOOST_FRAME_BUDGET_MS = 10;
+const BOOST_FRAME_BUDGET_MS = 20;
+
+/**
+ * Redraw one frame in this many while fast-forwarding.
+ *
+ * On a weak GPU the picture costs far more than the solver - this sandbox
+ * spends about 95 ms of a 105 ms frame drawing - so most of a fast-forward is
+ * otherwise spent rendering frames nobody asked for. Every frame skipped here
+ * goes to the water instead, and four is still fast enough to watch it fill.
+ */
+const BOOST_RENDER_EVERY = 4;
 
 export interface EditorCallbacks {
   onExit(): void;
@@ -77,8 +100,11 @@ export class EditorMode {
   private unsavedChanges = false;
   private boost: SettleRun | null = null;
   private boostButton: HTMLButtonElement | null = null;
-  /** Simulated seconds per frame, adapted to whatever this device can manage. */
+  /** Simulated seconds per slice, adapted to whatever this device can manage. */
   private boostSlice = 0.25;
+  /** Milliseconds of fast-forward already spent in the current frame. */
+  private boostSpentMs = 0;
+  private boostFrame = 0;
 
   constructor(
     level: Level,
@@ -374,19 +400,32 @@ export class EditorMode {
     const boost = this.boost;
     if (!boost) return;
 
+    // The app runs several fixed-step updates per frame when it is behind, and
+    // the budget is per *frame* - without this the boost would take that many
+    // budgets each time the frame rate dropped, which is exactly when it can
+    // least afford to.
+    if (this.boostSpentMs >= BOOST_FRAME_BUDGET_MS) return;
+
     const started = performance.now();
     boost.advance(this.boostSlice);
     const cost = performance.now() - started;
+    this.boostSpentMs += cost;
 
     // Re-aim the slice at one frame budget's worth of work, so a fast phone
     // fast-forwards faster and a slow one still renders while it does.
     if (cost > 0.5) {
       const scaled = (this.boostSlice * BOOST_FRAME_BUDGET_MS) / cost;
-      this.boostSlice = Math.min(4, Math.max(0.05, scaled));
+      this.boostSlice = Math.min(4, Math.max(SETTLE_DT, scaled));
     }
 
     if (boost.done) this.stopBoost('done');
     else this.refreshHint();
+  }
+
+  /** Skip most redraws while filling — see BOOST_RENDER_EVERY. */
+  skipRender(): boolean {
+    if (!this.boost) return false;
+    return this.boostFrame % BOOST_RENDER_EVERY !== 0;
   }
 
   private stopBoost(reason: 'done' | 'cancelled'): void {
@@ -413,6 +452,11 @@ export class EditorMode {
   }
 
   buildScene(time: number): Scene {
+    // Runs exactly once per frame, after that frame's updates, so this is where
+    // the fast-forward's per-frame budget turns over.
+    this.boostSpentMs = 0;
+    this.boostFrame++;
+
     return {
       level: this.level,
       sim: this.sim,

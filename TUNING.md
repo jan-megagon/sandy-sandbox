@@ -84,6 +84,33 @@ above ~2e-2 would pass on the first check, on a river that hasn't started
 moving. `SETTLE_RAMP_SECONDS` (3 s) is what stops that, and it is why the check
 is not simply "residual below threshold".
 
+### Fast-forward cost — `SETTLE_DT`, `BOOST_FRAME_BUDGET_MS`, `BOOST_RENDER_EVERY`
+
+Settling runs at **dt = 0.1 s**, not the 1/60 the game uses. Nothing watches a
+fast-forward frame by frame, so the only limit is stability, and `substepsFor`
+puts that at `0.4 · cellSize / waveSpeed` — about 0.127 s on 2 m cells under
+4 m of water. Measured on the demo, to the same settled state:
+
+| dt | steps | solver time | final volume | substeps |
+|---|---|---|---|---|
+| 1/60 | 12416 | 14.8 s | 1159 | 1 |
+| 0.05 | 4130 | 4.6 s | 1158 | 1 |
+| **0.10** | **2058** | **2.4 s** | 1157 | 1 |
+| 0.20 | 1024 | 2.3 s | 1156 | 2 |
+
+0.2 is where it stops paying: the substep guard splits it in two and hands back
+everything it gained. Deeper water lowers the ceiling, and the guard handles
+that on its own — a lake over ~6.5 m makes `step` substep without being asked.
+
+Past that the solver is no longer what costs. A fill needs a fixed amount of
+work, so at `BOOST_FRAME_BUDGET_MS` per frame it needs *work / budget* frames
+whatever the hardware — the budget, not the solver, sets how long it takes. It
+is set above one frame's 16.7 ms because `BOOST_RENDER_EVERY` skips three
+redraws in four, and those frames have nothing else to do. End to end on the
+demo, against this box's software rasteriser: 25.3 s originally, 9.8 s at
+dt = 0.1, 5.4 s once the budget went to 20 ms. A device with a real GPU spends
+far less of that on drawing, so expect the balance to differ.
+
 **Total volume is the tempting measure and the wrong one.** It stalls whenever
 the water finishes one basin and climbs again when that basin spills into the
 next — on the demo it drops to 1.26 m³/s at t=20 s, then rises back to 2.88 at
