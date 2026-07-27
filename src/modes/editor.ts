@@ -11,7 +11,13 @@ import {
   primeSim,
   toSimSources,
 } from '../sim/level';
-import { type BrushMode, type DirtyRect, applyBrush, unionRect } from '../sim/terrain';
+import {
+  type BrushMode,
+  type DirtyRect,
+  applyBrush,
+  generateFractalTerrain,
+  unionRect,
+} from '../sim/terrain';
 import type { WaterSim } from '../sim/water';
 import { button, clear, el, sheet, toast } from '../ui/dom';
 
@@ -148,7 +154,7 @@ export class EditorMode {
     this.gestures = new GestureRecognizer({
       onPaintStart: (x, y) => this.handlePointerDown(x, y),
       onPaintMove: (x, y) => this.handlePointerMove(x, y),
-      onPaintEnd: () => this.handlePointerUp(),
+      onPaintEnd: (committed) => this.handlePointerUp(committed),
       onPanZoom: (dx, dy, scale, cx, cy) => this.handlePanZoom(dx, dy, scale, cx, cy),
       onHover: (x, y) => {
         const w = this.toWorld(x, y);
@@ -235,13 +241,13 @@ export class EditorMode {
     this.brushCursor = p;
     if (!this.inBounds(p.x, p.y)) return;
 
-    this.pushUndo();
-
+    // Sculpting has to follow the finger, so it starts here. Placing an object
+    // waits for the release: it is a single irreversible act, and committing it
+    // on contact means a gesture that turns out to be a pinch has already done
+    // it. See handlePointerUp.
     if (TERRAIN_TOOLS.has(this.tool)) {
+      this.pushUndo();
       this.paint(p.x, p.y);
-    } else {
-      this.placeEntity(p.x, p.y);
-      this.refreshHint();
     }
   }
 
@@ -253,7 +259,13 @@ export class EditorMode {
     }
   }
 
-  private handlePointerUp(): void {
+  private handlePointerUp(committed: boolean): void {
+    const p = this.brushCursor;
+    if (committed && !TERRAIN_TOOLS.has(this.tool) && p && this.inBounds(p.x, p.y)) {
+      this.pushUndo();
+      this.placeEntity(p.x, p.y);
+      this.refreshHint();
+    }
     // Flush whatever the stroke touched to the GPU in one upload.
     this.flushDirty();
   }
@@ -637,6 +649,10 @@ export class EditorMode {
       toolRow,
       brushRow,
       el('div', { class: 'row' }, [
+        button('⛰', () => this.promptGenerate(), {
+          class: 'ghost',
+          title: 'Generate fractal terrain',
+        }),
         button('Reset water', () => {
           if (this.boost) this.stopBoost('cancelled');
           this.sim.clearWater();
@@ -701,6 +717,75 @@ export class EditorMode {
     this.panButton?.setAttribute('aria-pressed', String(on));
     this.refreshToolPanels();
     this.refreshHint();
+  }
+
+  /**
+   * Roll a fresh landscape to carve a river out of.
+   *
+   * Every press generates a new one, and each is a normal undoable edit, so
+   * rolling through a few and stepping back to the one you liked is the point
+   * rather than a workaround.
+   */
+  private promptGenerate(): void {
+    let relief = 18;
+    let scale = 0.35;
+
+    const reliefInput = el('input', {
+      type: 'range',
+      min: '4',
+      max: '36',
+      step: '1',
+      value: String(relief),
+      onInput: (e: Event) => {
+        relief = Number((e.target as HTMLInputElement).value);
+      },
+    });
+    const scaleInput = el('input', {
+      type: 'range',
+      min: '10',
+      max: '90',
+      step: '5',
+      value: String(Math.round(scale * 100)),
+      onInput: (e: Event) => {
+        scale = Number((e.target as HTMLInputElement).value) / 100;
+      },
+    });
+
+    const close = sheet(this.ui, {
+      title: 'Generate terrain',
+      body: [
+        el('p', {
+          class: 'result-note',
+          text: 'Fractal noise tilted down the map, so the water has somewhere to run. Generate as many as you like — each one can be undone.',
+        }),
+        el('div', { class: 'slider-row' }, [el('label', { text: 'Relief' }), reliefInput]),
+        el('div', { class: 'slider-row' }, [el('label', { text: 'Scale' }), scaleInput]),
+      ],
+      actions: [
+        {
+          label: 'Generate',
+          class: 'primary',
+          onClick: () => this.generateTerrain(relief, scale),
+        },
+        { label: 'Done', onClick: () => close() },
+      ],
+      onDismiss: () => close(),
+    });
+  }
+
+  private generateTerrain(relief: number, scale: number): void {
+    this.pushUndo();
+    const seed = Math.floor(Math.random() * 1e9);
+    const generated = generateFractalTerrain(levelGrid(this.level), { seed, relief, scale });
+
+    this.level.terrain.set(generated);
+    this.sim.terrain.set(generated);
+    this.renderer.uploadTerrain(this.level.terrain);
+
+    // The old river belonged to the old ground. Start the new one from scratch.
+    this.sim.clearWater();
+    primeSim(this.sim, toSimSources(this.level), { maxSeconds: 4 });
+    toast(this.ui, 'New terrain — press Fill to see where the water goes.');
   }
 
   private promptRename(titleNode: HTMLElement): void {

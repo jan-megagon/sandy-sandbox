@@ -71,6 +71,15 @@ Tools: raise, lower and smooth terrain; place springs, a start, a goal and
 rocks; erase. A level needs a spring, a start and a goal before it can be
 played.
 
+Sculpting starts as soon as your finger moves, but placing an object waits for
+you to lift it. Every two-finger gesture begins as one finger, so acting on
+first contact meant each pan dropped a rock; a first finger now waits ~90 ms,
+or until it has clearly moved, before it commits to anything.
+
+**⛰** rolls a fractal landscape to start from — noise tilted down the map so
+the water has somewhere to run. Generate as many as you like; each is a normal
+undoable edit, so stepping back to the one you liked is the point.
+
 A valley can need minutes of simulation to fill, which is not something to sit
 and watch at 1x. **Fill ⏩** runs the water forward as fast as the device
 allows, spending part of each frame on extra solver steps so the river fills in
@@ -153,5 +162,14 @@ the few percent of pixels that are wet.
   Roughly a thousand levels fit; there's no sync.
 - Share codes for heavily-noised terrain approach 15 KB. Sculpted levels
   compress far better. Very large codes are better shared as text than as a URL.
+
+  This is the part that has outgrown the approach. Putting the whole level in
+  the link was the right trade while levels were small and there was no server
+  to keep — it costs nothing to run and works offline — but a code that has to
+  be pasted as text is not really a share. **Deferred:** move sharing to a
+  small online service that stores a level and hands back a short link, keeping
+  the self-contained code as the offline fallback and the format of record.
+  Nothing in the level format needs to change for it; the codes are already
+  exactly what such a service would store.
 - The water and paddle constants are tuned against measurements, not against
   hours of play. Expect to want a pass on `TUNING.md` after real use.

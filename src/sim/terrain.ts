@@ -139,6 +139,46 @@ function fbm(x: number, y: number, seed: number, octaves = 4): number {
   return sum / norm;
 }
 
+export interface FractalOptions {
+  /** Same seed, same terrain. */
+  seed?: number;
+  /** Height of the tallest ground the noise produces, in metres. */
+  relief?: number;
+  /** Size of the largest features, as a fraction of the map. */
+  scale?: number;
+  /** Metres the map drops from head to mouth, so the water has somewhere to go. */
+  fall?: number;
+}
+
+/**
+ * Fractal terrain to start a level from.
+ *
+ * `generateDefaultTerrain` hands you a finished valley with a channel already
+ * cut; this hands you raw country to carve one out of. The overall tilt is the
+ * only thing it insists on - a pure noise field drains nowhere in particular
+ * and gives you a swamp rather than a river.
+ *
+ * Basins are left in on purpose. They fill and spill, which is where a
+ * generated map's lakes and their outflows come from.
+ */
+export function generateFractalTerrain(g: Grid, options: FractalOptions = {}): Float32Array {
+  const { seed = 1, relief = 18, scale = 0.35, fall = 10 } = options;
+  const t = new Float32Array(g.width * g.height);
+  // Cells across the largest feature, floored so a small grid stays legible.
+  const feature = Math.max(4, scale * Math.max(g.width, g.height));
+
+  for (let y = 0; y < g.height; y++) {
+    // 0 at the head of the map, 1 at the mouth.
+    const v = g.height > 1 ? y / (g.height - 1) : 0;
+    for (let x = 0; x < g.width; x++) {
+      const n = fbm(x / feature, y / feature, seed, 5);
+      const h = n * relief + (1 - v) * fall;
+      t[y * g.width + x] = Math.min(TERRAIN_MAX, Math.max(TERRAIN_MIN, h));
+    }
+  }
+  return t;
+}
+
 /**
  * Where the default valley's channel runs, as a fraction of the map width, for
  * a position `v` (0 at the head, 1 at the mouth) down the valley.
